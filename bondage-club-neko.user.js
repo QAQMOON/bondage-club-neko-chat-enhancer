@@ -18,6 +18,8 @@
 // @match        *://www.bondage-asia.com/club/R*/*
 // @match        *://bondage-asia.com/club/R*/*
 // @include      /^https:\/\/(www\.)?bondage(projects\.elementfx|-(europe|asia))\.com\/.*/
+// @downloadURL  https://github.com/QAQMOON/meow-/raw/main/bondage-club-neko.user.js
+// @updateURL    https://github.com/QAQMOON/meow-/raw/main/bondage-club-neko.user.js
 // @grant        GM_addStyle
 // @grant        unsafeWindow
 // @run-at       document-start
