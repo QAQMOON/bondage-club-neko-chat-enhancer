@@ -23,13 +23,13 @@
 
 粉色猫娘主题聊天室，自动将发送消息转换成猫娘语气，并同步美化本地聊天显示。搭配猫爪装饰、表情雨和便捷颜文字面板，让聊天更可爱、更顺手，喵~
 
-![猫娘可爱主题聊天室](assets/preview-chat-kaomoji.png)
+<!-- ![猫娘可爱主题聊天室](assets/preview-chat-kaomoji.png) -->
 
 ### 便捷动作轮盘
 
 内置抱抱、摸头、喂食等快捷动作，适合日常互动和 RP 使用。动作文案支持通过 GitHub 远程动作库持续扩展，之后想增加亲亲、贴贴等动作也更方便。
 
-![便捷动作轮盘](assets/preview-actions.png)
+<!-- ![便捷动作轮盘](assets/preview-actions.png) -->
 
 ## 安装
 
