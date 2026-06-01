@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bondage Club 猫娘聊天室增强
 // @namespace    https://penyo.ru/
-// @version      2.2.0
+// @version      2.3.0
 // @description  Bondage Club 猫娘消息转换、聊天室美化、猫爪表情雨和动作快捷轮盘
 // @author       Penyo (Modified)
 // @match        *://www.bondageprojects.com/club_game*
@@ -21,7 +21,9 @@
 // @downloadURL  https://github.com/QAQMOON/meow-/raw/main/bondage-club-neko.user.js
 // @updateURL    https://github.com/QAQMOON/meow-/raw/main/bondage-club-neko.user.js
 // @grant        GM_addStyle
+// @grant        GM_xmlhttpRequest
 // @grant        unsafeWindow
+// @connect      raw.githubusercontent.com
 // @run-at       document-start
 // @license      WTFPL
 // ==/UserScript==
@@ -31,8 +33,10 @@
 
   const W = typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
   const MOD_ID = "BCNekoEnhancer";
-  const VERSION = "2.2.0";
+  const VERSION = "2.3.0";
   const STORE_KEY = "bcNekoEnhancer.config.v2";
+  const ACTION_LIBRARY_URL = "https://raw.githubusercontent.com/QAQMOON/meow-/main/actions/catgirl-actions.json";
+  const ACTION_LIBRARY_CACHE_KEY = "bcNekoEnhancer.actionLibrary.v1";
   const KAOMOJI = ["(=^･ω･^=)", "ฅ(•ㅅ•❀)ฅ", "(=｀ω´=)", "(ฅ´ω`ฅ)", "(=^･ｪ･^=)"];
   const ACTION_TARGET_MODE = {
     AUTO: "auto",
@@ -49,6 +53,9 @@
     quickWheel: true,
     notifyIncoming: true,
     nyanChance: 0.55,
+    wheelCollapsed: true,
+    wheelX: null,
+    wheelY: null,
     actionTargetMode: ACTION_TARGET_MODE.AUTO,
     actions: [
       {
@@ -69,7 +76,19 @@
     ],
   };
 
+  const DEFAULT_ACTION_LIBRARY = {
+    version: "builtin",
+    actions: defaults.actions.map((action, index) => ({
+      id: ["hug", "pat", "feed"][index] || `builtin-${index}`,
+      label: action.label,
+      enabled: true,
+      self: [action.selfText],
+      target: [action.text],
+    })),
+  };
+
   const config = loadConfig();
+  let actionLibrary = loadCachedActionLibrary() || normalizeActionLibrary(DEFAULT_ACTION_LIBRARY);
   const processedMessages = new WeakSet();
   let patched = false;
   let settingsRegistered = false;
@@ -78,11 +97,13 @@
   console.log(`[BC 猫娘增强] v${VERSION} userscript injected:`, location.href);
   W.BCNekoEnhancer = {
     config,
+    actionLibrary: () => actionLibrary,
     version: VERSION,
     insertFace,
     toggle: toggleNekoMode,
     rain: pawRain,
     sendAction: sendQuickAction,
+    reloadActions: loadRemoteActionLibrary,
     status: () => ({ patched, enabled: config.enabled, screen: W.CurrentScreen, url: location.href }),
   };
 
@@ -99,6 +120,9 @@
     if (!Object.values(ACTION_TARGET_MODE).includes(next.actionTargetMode)) {
       next.actionTargetMode = ACTION_TARGET_MODE.AUTO;
     }
+    next.wheelCollapsed = next.wheelCollapsed !== false;
+    next.wheelX = Number.isFinite(Number(next.wheelX)) ? Number(next.wheelX) : null;
+    next.wheelY = Number.isFinite(Number(next.wheelY)) ? Number(next.wheelY) : null;
     const fallbackActions = defaults.actions;
     next.actions = (Array.isArray(next.actions) && next.actions.length ? next.actions : fallbackActions)
       .map((action, index) => ({
@@ -113,6 +137,88 @@
   function saveConfig() {
     normalizeConfig(config);
     localStorage.setItem(STORE_KEY, JSON.stringify(config));
+  }
+
+  function normalizeActionLibrary(source) {
+    const actions = Array.isArray(source?.actions) ? source.actions : [];
+    const normalized = actions
+      .map((action, index) => {
+        const self = Array.isArray(action.self) ? action.self.map(cleanActionLine).filter(Boolean) : [];
+        const target = Array.isArray(action.target) ? action.target.map(cleanActionLine).filter(Boolean) : [];
+        if (!self.length && !target.length) return null;
+        return {
+          id: String(action.id || `action-${index}`).trim() || `action-${index}`,
+          label: String(action.label || action.id || "动作").trim().slice(0, 6),
+          enabled: action.enabled !== false,
+          self,
+          target,
+        };
+      })
+      .filter(Boolean);
+    return {
+      version: String(source?.version || "unknown"),
+      updatedAt: source?.updatedAt || "",
+      actions: normalized.length ? normalized : DEFAULT_ACTION_LIBRARY.actions,
+    };
+  }
+
+  function cleanActionLine(line) {
+    return String(line || "").replace(/\{user\}\s*/g, "").trim();
+  }
+
+  function loadCachedActionLibrary() {
+    try {
+      const raw = localStorage.getItem(ACTION_LIBRARY_CACHE_KEY);
+      return raw ? normalizeActionLibrary(JSON.parse(raw)) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function cacheActionLibrary(library) {
+    try {
+      localStorage.setItem(ACTION_LIBRARY_CACHE_KEY, JSON.stringify(library));
+    } catch {
+      // Ignore storage failures; the builtin action library still works.
+    }
+  }
+
+  function loadRemoteActionLibrary() {
+    return requestActionLibraryText(ACTION_LIBRARY_URL)
+      .then((text) => {
+        const library = normalizeActionLibrary(JSON.parse(text));
+        actionLibrary = library;
+        cacheActionLibrary(library);
+        renderWheel();
+        console.log(`[BC 猫娘增强] 动作库已加载: ${library.version}, ${library.actions.length} 个主题`);
+        return library;
+      })
+      .catch((error) => {
+        console.warn("[BC 猫娘增强] 远程动作库加载失败，使用缓存/内置库:", error);
+        return actionLibrary;
+      });
+  }
+
+  function requestActionLibraryText(url) {
+    if (typeof GM_xmlhttpRequest === "function") {
+      return new Promise((resolve, reject) => {
+        GM_xmlhttpRequest({
+          method: "GET",
+          url,
+          timeout: 10000,
+          onload: (response) => {
+            if (response.status >= 200 && response.status < 300) resolve(response.responseText);
+            else reject(new Error(`HTTP ${response.status}`));
+          },
+          onerror: () => reject(new Error("network error")),
+          ontimeout: () => reject(new Error("timeout")),
+        });
+      });
+    }
+    return fetch(url, { cache: "no-cache" }).then((response) => {
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.text();
+    });
   }
 
   function clamp(value, min, max) {
@@ -130,10 +236,11 @@
     if (!document.body) return;
     document.body.classList.toggle("bcn-enabled", config.enabled);
     document.body.classList.toggle("bcn-wheel-on", config.quickWheel);
-    const toggleButton = document.getElementById("bcn-toggle");
-    if (toggleButton) {
-      toggleButton.textContent = config.enabled ? "😺" : "😿";
-      toggleButton.title = config.enabled ? "关闭猫娘模式" : "开启猫娘模式";
+    document.body.classList.toggle("bcn-wheel-collapsed", config.wheelCollapsed);
+    const handleButton = document.getElementById("bcn-wheel-handle");
+    if (handleButton) {
+      handleButton.textContent = config.wheelCollapsed ? "🐱" : "🐱";
+      handleButton.title = config.wheelCollapsed ? "展开动作轮盘，按住可拖动" : "收起动作轮盘，按住可拖动";
     }
   }
 
@@ -357,9 +464,22 @@
       }));
   }
 
+  function getActiveActions() {
+    return (actionLibrary.actions || []).filter((action) => action.enabled !== false);
+  }
+
+  function pickRandomLine(lines, fallback = "") {
+    const cleanLines = Array.isArray(lines) ? lines.filter(Boolean) : [];
+    if (!cleanLines.length) return fallback;
+    return cleanLines[Math.floor(Math.random() * cleanLines.length)];
+  }
+
   function formatActionText(action, target) {
-    if (target) return action.text.replace(/\{target\}/g, getCharacterName(target));
-    return action.selfText || action.text.replace(/\{target\}/g, "身边的猫猫");
+    const hasTarget = !!target;
+    const line = hasTarget
+      ? pickRandomLine(action.target, pickRandomLine(action.self, "{target}靠近了一点喵~"))
+      : pickRandomLine(action.self, pickRandomLine(action.target, "轻轻晃了晃尾巴喵~"));
+    return line.replace(/\{target\}/g, hasTarget ? getCharacterName(target) : "身边的猫猫");
   }
 
   function sendEmote(text) {
@@ -444,41 +564,133 @@
   }
 
   function editActions() {
-    const current = config.actions.map((a) => `${a.label}=${a.text}`).join("|");
-    const next = prompt("编辑动作轮盘：格式为 名称=动作，多项用 | 分隔，可用 {target}", current);
-    if (!next) return;
-    const parsed = next.split("|")
-      .map((part) => part.trim())
-      .filter(Boolean)
-      .map((part) => {
-        const [label, ...rest] = part.split("=");
-        return { label: (label || "动作").trim().slice(0, 6), text: (rest.join("=") || "").trim() };
-      })
-      .filter((item) => item.text);
-    if (parsed.length) {
-      config.actions = parsed.slice(0, 6);
-      saveConfig();
-      renderWheel();
-      showToast("动作轮盘已保存喵~");
-    }
+    window.open?.("https://github.com/QAQMOON/meow-/blob/main/actions/catgirl-actions.json", "_blank", "noopener");
+    showToast("动作库现在从 GitHub JSON 管理喵~");
   }
 
   function renderWheel() {
     const wheel = document.getElementById("bcn-wheel");
     if (!wheel) return;
     wheel.innerHTML = "";
-    config.actions.forEach((action) => {
+    getActiveActions().forEach((action, index) => {
       const btn = document.createElement("button");
       btn.className = "bcn-wheel-btn";
       btn.type = "button";
       btn.textContent = action.label;
-      btn.title = `${action.text}\n右键选择目标`;
+      btn.title = `${action.label}\n左键随机动作，右键选择目标`;
+      btn.style.setProperty("--i", String(index));
       btn.addEventListener("click", () => sendQuickAction(action));
       btn.addEventListener("contextmenu", (ev) => {
         ev.preventDefault();
         showTargetPicker(action, btn);
       });
       wheel.appendChild(btn);
+    });
+  }
+
+  function syncWheelPosition(panel) {
+    if (!panel) return;
+    const hasSavedPos = Number.isFinite(config.wheelX) && Number.isFinite(config.wheelY);
+    if (hasSavedPos) {
+      const pos = clampPanelPosition(panel, config.wheelX, config.wheelY);
+      config.wheelX = pos.left;
+      config.wheelY = pos.top;
+      panel.style.left = `${pos.left}px`;
+      panel.style.top = `${pos.top}px`;
+      panel.style.right = "auto";
+      panel.style.bottom = "auto";
+      return;
+    }
+    panel.style.left = "auto";
+    panel.style.top = "auto";
+    panel.style.right = "18px";
+    panel.style.bottom = "18px";
+  }
+
+  function clampPanelPosition(panel, left, top) {
+    const maxLeft = Math.max(0, window.innerWidth - panel.offsetWidth - 6);
+    const maxTop = Math.max(0, window.innerHeight - panel.offsetHeight - 6);
+    return {
+      left: Math.round(clamp(left, 6, maxLeft)),
+      top: Math.round(clamp(top, 6, maxTop)),
+    };
+  }
+
+  function setWheelCollapsed(collapsed) {
+    config.wheelCollapsed = !!collapsed;
+    saveConfig();
+    syncBodyState();
+  }
+
+  function toggleWheelCollapsed() {
+    setWheelCollapsed(!config.wheelCollapsed);
+  }
+
+  function makePanelDraggable(panel, handle) {
+    let dragging = false;
+    let moved = false;
+    let startX = 0;
+    let startY = 0;
+    let originLeft = 0;
+    let originTop = 0;
+
+    const stopDrag = () => {
+      if (!dragging) return;
+      dragging = false;
+      panel.classList.remove("is-dragging");
+      if (moved) saveConfig();
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+    };
+
+    const onMove = (event) => {
+      if (!dragging) return;
+      const dx = event.clientX - startX;
+      const dy = event.clientY - startY;
+      if (!moved && Math.hypot(dx, dy) > 5) moved = true;
+      if (!moved) return;
+      const pos = clampPanelPosition(panel, originLeft + dx, originTop + dy);
+      panel.style.left = `${pos.left}px`;
+      panel.style.top = `${pos.top}px`;
+      panel.style.right = "auto";
+      panel.style.bottom = "auto";
+      config.wheelX = pos.left;
+      config.wheelY = pos.top;
+      syncBodyState();
+    };
+
+    const onUp = () => {
+      stopDrag();
+    };
+
+    handle.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      dragging = true;
+      moved = false;
+      startX = event.clientX;
+      startY = event.clientY;
+      originLeft = panel.getBoundingClientRect().left;
+      originTop = panel.getBoundingClientRect().top;
+      panel.classList.add("is-dragging");
+      handle.setPointerCapture?.(event.pointerId);
+      document.addEventListener("pointermove", onMove);
+      document.addEventListener("pointerup", onUp);
+    });
+
+    handle.addEventListener("click", (event) => {
+      if (moved) {
+        event.preventDefault();
+        event.stopPropagation();
+        moved = false;
+        return;
+      }
+      toggleWheelCollapsed();
+    });
+
+    handle.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      toggleConfig("enabled");
     });
   }
 
@@ -499,24 +711,25 @@
     const panel = document.createElement("div");
     panel.id = "bcn-panel";
     panel.innerHTML = `
+      <button class="bcn-btn" id="bcn-wheel-handle" type="button" title="展开动作轮盘，按住可拖动">🐱</button>
+      <div class="bcn-wheel-wrap">
+        <div id="bcn-wheel"></div>
+      </div>
       <button class="bcn-btn" id="bcn-face" type="button" title="插入猫猫颜文字">🐱</button>
-      <button class="bcn-btn" id="bcn-toggle" type="button" title="${config.enabled ? "关闭猫娘模式" : "开启猫娘模式"}">${config.enabled ? "😺" : "😿"}</button>
-      <div id="bcn-wheel"></div>
     `;
     document.body.appendChild(panel);
 
-    document.getElementById("bcn-face").addEventListener("click", insertFace);
-    document.getElementById("bcn-toggle").addEventListener("click", (ev) => toggleNekoMode(ev.currentTarget));
+    const faceButton = document.getElementById("bcn-face");
+    faceButton.addEventListener("click", insertFace);
     document.getElementById("bcn-face").addEventListener("contextmenu", (ev) => {
       ev.preventDefault();
       pawRain("Chat");
     });
-    document.getElementById("bcn-toggle").addEventListener("contextmenu", (ev) => {
-      ev.preventDefault();
-      toggleConfig("quickWheel");
-      showToast(config.quickWheel ? "动作轮盘开启喵~" : "动作轮盘已关闭");
-    });
 
+    const handleButton = document.getElementById("bcn-wheel-handle");
+    makePanelDraggable(panel, handleButton);
+
+    syncWheelPosition(panel);
     renderWheel();
     syncBodyState();
   }
@@ -656,8 +869,8 @@
       drawLabel("互动目标模式", 1280, 640, 440, "#8d4d67", 24);
       drawLabel("自动：优先当前选中角色，其次聊天目标。右键动作按钮可手动选择。", 1040, 690, 690, "#a47d89", 19);
 
-      drawButton(1040, 700, 220, 58, "编辑动作", "#fff7fb");
-      drawLabel("动作轮盘最多 6 项，格式：名称=动作，多项用 | 分隔。", 1280, 730, 520, "#a47d89", 19);
+      drawButton(1040, 700, 220, 58, "动作库", "#fff7fb");
+      drawLabel("从 GitHub 动作库加载；失败时使用缓存或内置动作。", 1280, 730, 560, "#a47d89", 19);
 
       drawNekoPreview();
     }
@@ -811,15 +1024,21 @@
         bottom: 18px;
         z-index: 100000;
         display: flex;
-        flex-direction: row-reverse;
-        align-items: flex-end;
+        flex-direction: row;
+        align-items: center;
         gap: 8px;
-        padding: 8px;
+        width: fit-content;
+        height: fit-content;
+        padding: 6px 8px;
         border: 2px solid rgba(255, 143, 189, 0.75);
-        border-radius: 18px;
+        border-radius: 16px;
         background: rgba(255, 250, 252, 0.88);
         box-shadow: 0 10px 28px rgba(255, 143, 189, 0.28);
         backdrop-filter: blur(8px);
+      }
+
+      #bcn-panel.is-dragging {
+        user-select: none;
       }
 
       .bcn-btn,
@@ -835,10 +1054,50 @@
         box-shadow: 0 3px 0 #f6b7ce;
       }
 
+      #bcn-wheel-handle,
+      #bcn-face {
+        width: 52px;
+        height: 52px;
+        min-width: 52px;
+        min-height: 52px;
+        font-size: 25px;
+      }
+
       .bcn-btn:hover,
       .bcn-wheel-btn:hover {
         transform: translateY(-1px);
         background: #fff5f9;
+      }
+
+      .bcn-wheel-wrap {
+        position: absolute;
+        right: 8px;
+        bottom: calc(100% + 8px);
+        overflow: hidden;
+        max-width: 0;
+        padding: 0;
+        border: 2px solid rgba(255, 143, 189, 0.7);
+        border-radius: 16px;
+        background: rgba(255, 250, 252, 0.92);
+        box-shadow: 0 10px 28px rgba(255, 143, 189, 0.24);
+        backdrop-filter: blur(8px);
+        transition: max-width 0.22s ease, opacity 0.22s ease, transform 0.22s ease, padding 0.22s ease;
+        opacity: 0;
+        transform: translateY(8px) scale(0.96);
+        pointer-events: none;
+      }
+
+      body.bcn-wheel-on .bcn-wheel-wrap {
+        max-width: 520px;
+        padding: 8px;
+        opacity: 1;
+        transform: translateY(0) scale(1);
+        pointer-events: auto;
+      }
+
+      .bcn-wheel-wrap,
+      .bcn-wheel-btn {
+        transition: max-width 0.22s ease, opacity 0.22s ease, transform 0.22s ease, filter 0.22s ease, padding 0.22s ease;
       }
 
       #bcn-wheel {
@@ -847,15 +1106,61 @@
         max-width: min(58vw, 520px);
         flex-wrap: wrap;
         justify-content: flex-end;
+        align-items: center;
       }
 
-      body.bcn-wheel-on #bcn-wheel {
+      body.bcn-wheel-on #bcn-wheel,
+      body.bcn-wheel-on .bcn-wheel-wrap #bcn-wheel {
         display: flex;
       }
 
+      body.bcn-wheel-on .bcn-wheel-btn {
+        animation: bcn-pop 0.24s ease both;
+        animation-delay: calc(var(--i, 0) * 0.04s);
+      }
+
+      body.bcn-wheel-collapsed .bcn-wheel-wrap {
+        max-width: 0;
+        padding: 0;
+        opacity: 0;
+        transform: translateY(8px) scale(0.96);
+        pointer-events: none;
+      }
+
+      #bcn-wheel-handle {
+        cursor: grab;
+      }
+
+      #bcn-wheel-handle:active {
+        cursor: grabbing;
+      }
+
       .bcn-wheel-btn {
-        padding: 0 12px;
-        font-size: 16px;
+        min-width: 50px;
+        padding: 0 14px;
+        font-size: 17px;
+      }
+
+      body.bcn-wheel-collapsed .bcn-wheel-btn {
+        opacity: 0;
+        transform: translateX(-10px) scale(0.92);
+        filter: blur(0.5px);
+        pointer-events: none;
+      }
+
+      @keyframes bcn-pop {
+        0% {
+          opacity: 0;
+          transform: translateX(-10px) scale(0.92);
+        }
+        70% {
+          opacity: 1;
+          transform: translateX(2px) scale(1.03);
+        }
+        100% {
+          opacity: 1;
+          transform: translateX(0) scale(1);
+        }
       }
 
       #TextAreaChatLog {
@@ -1068,6 +1373,7 @@
   function init() {
     installStyles();
     createPanel();
+    loadRemoteActionLibrary();
     installObserver();
     syncScreenClass();
 

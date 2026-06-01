@@ -8,6 +8,7 @@
 - 接收消息可选择显示转换
 - 聊天室美化与猫爪表情雨
 - 右下角动作快捷轮盘
+- GitHub 远程动作库，支持后续扩展更多动作主题
 - 扩展组件设置页，支持细项开关和概率调节
 - 动作可自动选目标、手动选目标，或只对自己生效
 
@@ -20,6 +21,32 @@ https://github.com/QAQMOON/meow-/raw/main/bondage-club-neko.user.js
 ## 更新
 
 直接在油猴里检查脚本更新即可；仓库里的 `main` 分支会保持最新版本。
+
+## 动作库
+
+动作文案放在：
+
+https://github.com/QAQMOON/meow-/blob/main/actions/catgirl-actions.json
+
+插件启动时会尝试从 GitHub 加载动作库；如果加载失败，会使用上次缓存，缓存也没有时会使用内置默认动作。
+
+新增动作主题时，在 `actions` 数组里追加一项即可：
+
+```json
+{
+  "id": "kiss",
+  "label": "亲亲",
+  "enabled": true,
+  "self": [
+    "轻轻碰了碰自己的指尖，假装这是一个小小亲亲喵~"
+  ],
+  "target": [
+    "轻轻亲了亲 {target}，然后害羞地别过脸喵~"
+  ]
+}
+```
+
+`label` 会显示在动作轮盘按钮上；`self` 用于没有目标或只对自己时；`target` 用于对其他角色释放时。
 
 ## 说明
 
