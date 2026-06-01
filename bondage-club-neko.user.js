@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bondage Club 猫娘聊天室增强
 // @namespace    https://penyo.ru/
-// @version      2.4.0
+// @version      2.5.0
 // @description  Bondage Club 猫娘消息转换、聊天室美化、猫爪表情雨和动作快捷轮盘
 // @author       Penyo (Modified)
 // @match        *://www.bondageprojects.com/club_game*
@@ -33,7 +33,7 @@
 
   const W = typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
   const MOD_ID = "BCNekoEnhancer";
-  const VERSION = "2.4.0";
+  const VERSION = "2.5.0";
   const STORE_KEY = "bcNekoEnhancer.config.v2";
   const ACTION_LIBRARY_URL = "https://raw.githubusercontent.com/QAQMOON/meow-/main/actions/catgirl-actions.json";
   const ACTION_LIBRARY_CACHE_KEY = "bcNekoEnhancer.actionLibrary.v1";
@@ -108,6 +108,7 @@
   let patched = false;
   let settingsRegistered = false;
   let toastTimer = 0;
+  let activeKaomojiGroup = "all";
 
   console.log(`[BC 猫娘增强] v${VERSION} userscript injected:`, location.href);
   W.BCNekoEnhancer = {
@@ -116,6 +117,8 @@
     kaomojiLibrary: () => kaomojiLibrary,
     version: VERSION,
     insertFace,
+    insertKaomoji,
+    toggleKaomojiPicker,
     toggle: toggleNekoMode,
     rain: pawRain,
     sendAction: sendQuickAction,
@@ -247,6 +250,16 @@
     return items.length ? items : DEFAULT_KAOMOJI;
   }
 
+  function getVisibleKaomojiGroups() {
+    return kaomojiLibrary.groups.filter((group) => group.enabled !== false && group.items.length);
+  }
+
+  function getKaomojiItemsForGroup(groupId) {
+    if (groupId === "all") return getActiveKaomojiItems();
+    const group = getVisibleKaomojiGroups().find((item) => item.id === groupId);
+    return group?.items?.length ? group.items : getActiveKaomojiItems();
+  }
+
   function pickRandomKaomoji() {
     const items = getActiveKaomojiItems();
     return items[Math.floor(Math.random() * items.length)] || DEFAULT_KAOMOJI[0];
@@ -279,6 +292,7 @@
         const library = normalizeKaomojiLibrary(JSON.parse(text));
         kaomojiLibrary = library;
         cacheKaomojiLibrary(library);
+        renderKaomojiPicker();
         console.log(`[BC 猫娘增强] 颜文字库已加载: ${library.version}, ${getActiveKaomojiItems().length} 个颜文字`);
         return library;
       })
@@ -330,6 +344,17 @@
     if (handleButton) {
       handleButton.textContent = config.wheelCollapsed ? "🐱" : "🐱";
       handleButton.title = config.wheelCollapsed ? "展开动作轮盘，按住可拖动" : "收起动作轮盘，按住可拖动";
+    }
+  }
+
+  function syncKaomojiPickerState(open) {
+    document.body?.classList.toggle("bcn-kaomoji-open", !!open);
+    const picker = document.getElementById("bcn-kaomoji-picker");
+    const button = document.getElementById("bcn-face");
+    picker?.classList.toggle("is-open", !!open);
+    button?.classList.toggle("is-active", !!open);
+    if (button) {
+      button.title = open ? "收起猫猫颜文字" : "打开猫猫颜文字，长按 2 秒也可打开";
     }
   }
 
@@ -498,9 +523,8 @@
       || document.querySelector("input[type='text']");
   }
 
-  function insertFace() {
+  function insertKaomoji(face) {
     const input = getChatInput();
-    const face = pickRandomKaomoji();
     if (!input) {
       showToast("还没找到聊天框，进入聊天室后再点喵~");
       return;
@@ -518,6 +542,10 @@
       input.setSelectionRange(pos, pos);
     }
     showToast("猫猫颜文字已插入喵~");
+  }
+
+  function insertFace() {
+    insertKaomoji(pickRandomKaomoji());
   }
 
   function toggleNekoMode(button) {
@@ -677,6 +705,126 @@
     });
   }
 
+  function renderKaomojiPicker() {
+    const picker = document.getElementById("bcn-kaomoji-picker");
+    if (!picker) return;
+    const groups = getVisibleKaomojiGroups();
+    if (activeKaomojiGroup !== "all" && !groups.some((group) => group.id === activeKaomojiGroup)) {
+      activeKaomojiGroup = "all";
+    }
+    const items = getKaomojiItemsForGroup(activeKaomojiGroup);
+    const tabs = [
+      { id: "all", label: "全部" },
+      ...groups.map((group) => ({ id: group.id, label: group.label })),
+    ];
+
+    picker.innerHTML = `
+      <div class="bcn-kaomoji-tabs"></div>
+      <div class="bcn-kaomoji-grid"></div>
+    `;
+
+    const tabWrap = picker.querySelector(".bcn-kaomoji-tabs");
+    tabs.forEach((tab) => {
+      const button = document.createElement("button");
+      button.className = `bcn-kaomoji-tab${tab.id === activeKaomojiGroup ? " is-active" : ""}`;
+      button.type = "button";
+      button.textContent = tab.label;
+      button.title = `显示${tab.label}颜文字`;
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        activeKaomojiGroup = tab.id;
+        renderKaomojiPicker();
+        syncKaomojiPickerState(true);
+      });
+      tabWrap.appendChild(button);
+    });
+
+    const grid = picker.querySelector(".bcn-kaomoji-grid");
+    items.forEach((face, index) => {
+      const button = document.createElement("button");
+      button.className = "bcn-kaomoji-item";
+      button.type = "button";
+      button.textContent = face;
+      button.title = face;
+      button.style.setProperty("--i", String(index % 18));
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        insertKaomoji(face);
+        hideKaomojiPicker();
+      });
+      grid.appendChild(button);
+    });
+  }
+
+  function showKaomojiPicker() {
+    setWheelCollapsed(true);
+    renderKaomojiPicker();
+    syncKaomojiPickerState(true);
+    document.removeEventListener("pointerdown", closeKaomojiPickerOnOutside);
+    setTimeout(() => {
+      document.addEventListener("pointerdown", closeKaomojiPickerOnOutside);
+    }, 0);
+  }
+
+  function hideKaomojiPicker() {
+    syncKaomojiPickerState(false);
+    document.removeEventListener("pointerdown", closeKaomojiPickerOnOutside);
+  }
+
+  function toggleKaomojiPicker() {
+    if (document.getElementById("bcn-kaomoji-picker")?.classList.contains("is-open")) {
+      hideKaomojiPicker();
+    } else {
+      showKaomojiPicker();
+    }
+  }
+
+  function closeKaomojiPickerOnOutside(event) {
+    if (event.target?.closest?.("#bcn-kaomoji-picker, #bcn-face")) {
+      return;
+    }
+    hideKaomojiPicker();
+  }
+
+  function bindKaomojiButton(button) {
+    let longPressTimer = 0;
+    let longPressTriggered = false;
+
+    const clearLongPress = () => {
+      clearTimeout(longPressTimer);
+      longPressTimer = 0;
+    };
+
+    button.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      longPressTriggered = false;
+      clearLongPress();
+      longPressTimer = setTimeout(() => {
+        longPressTriggered = true;
+        showKaomojiPicker();
+      }, 2000);
+    });
+
+    ["pointerup", "pointercancel", "pointerleave"].forEach((type) => {
+      button.addEventListener(type, clearLongPress);
+    });
+
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (longPressTriggered) {
+        longPressTriggered = false;
+        return;
+      }
+      toggleKaomojiPicker();
+    });
+
+    button.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      clearLongPress();
+      pawRain("Chat");
+    });
+  }
+
   function syncWheelPosition(panel) {
     if (!panel) return;
     const hasSavedPos = Number.isFinite(config.wheelX) && Number.isFinite(config.wheelY);
@@ -712,6 +860,7 @@
   }
 
   function toggleWheelCollapsed() {
+    hideKaomojiPicker();
     setWheelCollapsed(!config.wheelCollapsed);
   }
 
@@ -804,22 +953,20 @@
       <div class="bcn-wheel-wrap">
         <div id="bcn-wheel"></div>
       </div>
-      <button class="bcn-btn" id="bcn-face" type="button" title="插入猫猫颜文字">🐱</button>
+      <div id="bcn-kaomoji-picker" aria-label="猫猫颜文字选择器"></div>
+      <button class="bcn-btn" id="bcn-face" type="button" title="打开猫猫颜文字，长按 2 秒也可打开">🐱</button>
     `;
     document.body.appendChild(panel);
 
     const faceButton = document.getElementById("bcn-face");
-    faceButton.addEventListener("click", insertFace);
-    document.getElementById("bcn-face").addEventListener("contextmenu", (ev) => {
-      ev.preventDefault();
-      pawRain("Chat");
-    });
+    bindKaomojiButton(faceButton);
 
     const handleButton = document.getElementById("bcn-wheel-handle");
     makePanelDraggable(panel, handleButton);
 
     syncWheelPosition(panel);
     renderWheel();
+    renderKaomojiPicker();
     syncBodyState();
   }
 
@@ -1224,6 +1371,11 @@
         cursor: grabbing;
       }
 
+      #bcn-face.is-active {
+        outline: 3px solid rgba(178, 140, 255, 0.38);
+        background: linear-gradient(180deg, #fff7fb 0%, #ffdce9 100%);
+      }
+
       .bcn-wheel-btn {
         min-width: 50px;
         padding: 0 14px;
@@ -1249,6 +1401,113 @@
         100% {
           opacity: 1;
           transform: translateX(0) scale(1);
+        }
+      }
+
+      #bcn-kaomoji-picker {
+        position: absolute;
+        right: 0;
+        bottom: calc(100% + 10px);
+        width: min(420px, calc(100vw - 24px));
+        max-height: min(420px, calc(100vh - 120px));
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 10px;
+        border: 2px solid rgba(255, 143, 189, 0.78);
+        border-radius: 16px;
+        background: rgba(255, 250, 252, 0.96);
+        box-shadow: 0 14px 32px rgba(255, 143, 189, 0.26), 0 2px 10px rgba(80, 40, 60, 0.12);
+        backdrop-filter: blur(10px);
+        opacity: 0;
+        transform: translateY(8px) scale(0.96);
+        transform-origin: right bottom;
+        pointer-events: none;
+        transition: opacity 0.2s ease, transform 0.2s ease;
+      }
+
+      #bcn-kaomoji-picker.is-open {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+        pointer-events: auto;
+      }
+
+      .bcn-kaomoji-tabs {
+        display: flex;
+        gap: 6px;
+        max-width: 100%;
+        overflow-x: auto;
+        padding: 0 0 4px;
+        scrollbar-width: thin;
+      }
+
+      .bcn-kaomoji-tab,
+      .bcn-kaomoji-item {
+        border: 2px solid rgba(255, 159, 197, 0.82);
+        border-radius: 12px;
+        background: linear-gradient(180deg, #fff 0%, #fff1f7 100%);
+        color: #7d405c;
+        cursor: pointer;
+        box-shadow: 0 2px 0 rgba(246, 183, 206, 0.92);
+      }
+
+      .bcn-kaomoji-tab {
+        flex: 0 0 auto;
+        min-height: 30px;
+        padding: 0 10px;
+        font-size: 13px;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+
+      .bcn-kaomoji-tab.is-active {
+        border-color: #b28cff;
+        background: linear-gradient(180deg, #fff 0%, #f3e9ff 100%);
+        color: #6d4bad;
+      }
+
+      .bcn-kaomoji-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+        gap: 8px;
+        overflow-y: auto;
+        overflow-x: hidden;
+        padding: 2px 4px 4px 2px;
+        scrollbar-width: thin;
+      }
+
+      .bcn-kaomoji-item {
+        min-height: 42px;
+        padding: 0 8px;
+        font-size: 18px;
+        font-family: "Segoe UI Emoji", "Noto Color Emoji", "Apple Color Emoji", "Meiryo", sans-serif;
+        font-weight: 700;
+        line-height: 1.1;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        animation: bcn-pop 0.2s ease both;
+        animation-delay: calc(var(--i, 0) * 0.012s);
+      }
+
+      .bcn-kaomoji-tab:hover,
+      .bcn-kaomoji-item:hover {
+        transform: translateY(-1px);
+        background: #fff5f9;
+      }
+
+      @media (max-width: 520px) {
+        #bcn-kaomoji-picker {
+          width: min(330px, calc(100vw - 16px));
+          max-height: min(360px, calc(100vh - 96px));
+        }
+
+        .bcn-kaomoji-grid {
+          grid-template-columns: repeat(auto-fill, minmax(94px, 1fr));
+        }
+
+        .bcn-kaomoji-item {
+          font-size: 16px;
         }
       }
 
@@ -1362,7 +1621,7 @@
         box-shadow: inset 0 1px 0 rgba(255,255,255,0.8);
       }
 
-      body.bcn-enabled button:not(.bcn-btn):not(.bcn-wheel-btn),
+      body.bcn-enabled button:not(.bcn-btn):not(.bcn-wheel-btn):not(.bcn-kaomoji-tab):not(.bcn-kaomoji-item),
       body.bcn-enabled .button {
         border-radius: 10px !important;
       }
