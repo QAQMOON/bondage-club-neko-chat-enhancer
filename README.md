@@ -33,13 +33,22 @@
 
 ## 安装
 
-先安装油猴或其他 userscript 管理器，然后打开下面这个链接安装：
+先安装油猴或其他 userscript 管理器，然后选择一个版本安装：
 
+正式版：
 https://github.com/QAQMOON/meow-/raw/main/bondage-club-neko.user.js
+
+测试版：
+https://github.com/QAQMOON/meow-/raw/main/bondage-club-neko-dev.user.js
 
 ## 更新
 
-直接在油猴里检查脚本更新即可；仓库里的 `main` 分支会保持最新版本。
+插件现在使用动态加载。安装正式版或测试版入口后，每次刷新游戏、重新进入游戏时，都会自动从 GitHub 拉取对应版本的最新插件主体。
+
+- 正式版会加载 `dist/bondage-club-neko.runtime.js`
+- 测试版会加载 `dist/bondage-club-neko.dev.runtime.js`
+
+如果 GitHub 暂时无法访问，插件会尝试使用上一次成功加载的缓存版本。loader 入口本身很少变化；只有入口脚本更新时，才需要在油猴里检查更新。
 
 ## 动作库
 
