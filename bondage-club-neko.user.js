@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bondage Club 猫娘聊天室增强
 // @namespace    https://penyo.ru/
-// @version      2.6.0
+// @version      2.7.0
 // @description  Bondage Club 猫娘消息转换、聊天室美化、猫爪表情雨和动作快捷轮盘
 // @author       Penyo (Modified)
 // @match        *://www.bondageprojects.com/club_game*
@@ -33,7 +33,7 @@
 
   const W = typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
   const MOD_ID = "BCNekoEnhancer";
-  const VERSION = "2.6.0";
+  const VERSION = "2.7.0";
   const STORE_KEY = "bcNekoEnhancer.config.v2";
   const ACTION_LIBRARY_URL = "https://raw.githubusercontent.com/QAQMOON/meow-/main/actions/catgirl-actions.json";
   const ACTION_LIBRARY_CACHE_KEY = "bcNekoEnhancer.actionLibrary.v1";
@@ -55,6 +55,7 @@
     quickWheel: true,
     notifyIncoming: true,
     nyanChance: 0.55,
+    menuCollapsed: true,
     wheelCollapsed: true,
     wheelX: null,
     wheelY: null,
@@ -140,6 +141,7 @@
     if (!Object.values(ACTION_TARGET_MODE).includes(next.actionTargetMode)) {
       next.actionTargetMode = ACTION_TARGET_MODE.AUTO;
     }
+    next.menuCollapsed = next.menuCollapsed !== false;
     next.wheelCollapsed = next.wheelCollapsed !== false;
     next.wheelX = Number.isFinite(Number(next.wheelX)) ? Number(next.wheelX) : null;
     next.wheelY = Number.isFinite(Number(next.wheelY)) ? Number(next.wheelY) : null;
@@ -339,13 +341,18 @@
     if (!document.body) return;
     document.body.classList.toggle("bcn-enabled", config.enabled);
     document.body.classList.toggle("bcn-wheel-on", config.quickWheel);
+    document.body.classList.toggle("bcn-menu-collapsed", config.menuCollapsed);
     document.body.classList.toggle("bcn-wheel-collapsed", config.wheelCollapsed);
+    const mainButton = document.getElementById("bcn-main-cat");
+    if (mainButton) {
+      mainButton.title = config.menuCollapsed
+        ? "展开猫猫菜单，按住可拖动，长按 10 秒切换猫娘模式"
+        : "收起猫猫菜单，按住可拖动，长按 10 秒切换猫娘模式";
+    }
     const handleButton = document.getElementById("bcn-wheel-handle");
     if (handleButton) {
       handleButton.textContent = config.wheelCollapsed ? "🐱" : "🐱";
-      handleButton.title = config.wheelCollapsed
-        ? "展开动作轮盘，按住可拖动，长按 10 秒切换猫娘模式"
-        : "收起动作轮盘，按住可拖动，长按 10 秒切换猫娘模式";
+      handleButton.title = config.wheelCollapsed ? "展开动作轮盘" : "收起动作轮盘";
     }
   }
 
@@ -797,7 +804,7 @@
     hideKaomojiPicker();
   }
 
-  function bindKaomojiButton(button) {
+  function bindKaomojiButton(button, dragState) {
     let longPressTimer = 0;
     let longPressTriggered = false;
 
@@ -811,6 +818,7 @@
       longPressTriggered = false;
       clearLongPress();
       longPressTimer = setTimeout(() => {
+        if (dragState.hasMoved() || dragState.wasJustDragged()) return;
         longPressTriggered = true;
         showKaomojiPicker();
       }, 2000);
@@ -822,7 +830,7 @@
 
     button.addEventListener("click", (event) => {
       event.stopPropagation();
-      if (longPressTriggered) {
+      if (dragState.wasJustDragged() || longPressTriggered) {
         longPressTriggered = false;
         return;
       }
@@ -875,27 +883,51 @@
     setWheelCollapsed(!config.wheelCollapsed);
   }
 
-  function makePanelDraggable(panel, handle) {
+  function setMenuCollapsed(collapsed) {
+    config.menuCollapsed = !!collapsed;
+    if (config.menuCollapsed) {
+      config.wheelCollapsed = true;
+      hideKaomojiPicker();
+      document.removeEventListener("pointerdown", closeMenuOnOutside);
+    }
+    saveConfig();
+    syncBodyState();
+    if (!config.menuCollapsed) {
+      setTimeout(() => {
+        document.addEventListener("pointerdown", closeMenuOnOutside);
+      }, 0);
+    }
+  }
+
+  function toggleMenuCollapsed() {
+    setMenuCollapsed(!config.menuCollapsed);
+  }
+
+  function closeMenuOnOutside(event) {
+    if (event.target?.closest?.("#bcn-panel")) return;
+    setMenuCollapsed(true);
+  }
+
+  function makePanelDraggable(panel) {
     let dragging = false;
     let moved = false;
-    let longPressTimer = 0;
-    let longPressTriggered = false;
+    let panelJustDragged = false;
     let startX = 0;
     let startY = 0;
     let originLeft = 0;
     let originTop = 0;
 
-    const clearLongPress = () => {
-      clearTimeout(longPressTimer);
-      longPressTimer = 0;
-    };
-
     const stopDrag = () => {
       if (!dragging) return;
       dragging = false;
-      clearLongPress();
       panel.classList.remove("is-dragging");
-      if (moved) saveConfig();
+      if (moved) {
+        panelJustDragged = true;
+        saveConfig();
+        setTimeout(() => {
+          panelJustDragged = false;
+        }, 150);
+      }
       document.removeEventListener("pointermove", onMove);
       document.removeEventListener("pointerup", onUp);
     };
@@ -906,7 +938,7 @@
       const dy = event.clientY - startY;
       if (!moved && Math.hypot(dx, dy) > 5) {
         moved = true;
-        clearLongPress();
+        hideKaomojiPicker();
       }
       if (!moved) return;
       const pos = clampPanelPosition(panel, originLeft + dx, originTop + dy);
@@ -923,43 +955,78 @@
       stopDrag();
     };
 
-    handle.addEventListener("pointerdown", (event) => {
+    panel.addEventListener("pointerdown", (event) => {
       if (event.button !== 0) return;
+      if (event.target?.closest?.("#bcn-wheel, #bcn-kaomoji-picker")) return;
       event.preventDefault();
       dragging = true;
       moved = false;
-      longPressTriggered = false;
       startX = event.clientX;
       startY = event.clientY;
       originLeft = panel.getBoundingClientRect().left;
       originTop = panel.getBoundingClientRect().top;
       panel.classList.add("is-dragging");
-      handle.setPointerCapture?.(event.pointerId);
-      clearLongPress();
-      longPressTimer = setTimeout(() => {
-        if (!dragging || moved) return;
-        longPressTriggered = true;
-        stopDrag();
-        toggleNekoMode();
-      }, 10000);
+      panel.setPointerCapture?.(event.pointerId);
       document.addEventListener("pointermove", onMove);
       document.addEventListener("pointerup", onUp);
     });
 
-    handle.addEventListener("click", (event) => {
-      if (moved || longPressTriggered) {
-        event.preventDefault();
-        event.stopPropagation();
-        moved = false;
+    return {
+      isDragging: () => dragging,
+      hasMoved: () => moved,
+      wasJustDragged: () => panelJustDragged,
+    };
+  }
+
+  function bindMainCatButton(button, dragState) {
+    let longPressTimer = 0;
+    let longPressTriggered = false;
+
+    const clearLongPress = () => {
+      clearTimeout(longPressTimer);
+      longPressTimer = 0;
+    };
+
+    button.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      longPressTriggered = false;
+      clearLongPress();
+      longPressTimer = setTimeout(() => {
+        if (dragState.hasMoved() || dragState.wasJustDragged()) return;
+        longPressTriggered = true;
+        toggleNekoMode();
+      }, 10000);
+    });
+
+    ["pointerup", "pointercancel", "pointerleave"].forEach((type) => {
+      button.addEventListener(type, clearLongPress);
+    });
+
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (dragState.wasJustDragged() || longPressTriggered) {
         longPressTriggered = false;
         return;
       }
+      toggleMenuCollapsed();
+    });
+
+    button.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      showToast("按住主猫猫 10 秒可切换猫娘模式喵~");
+    });
+  }
+
+  function bindWheelButton(button, dragState) {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (dragState.wasJustDragged()) return;
       toggleWheelCollapsed();
     });
 
-    handle.addEventListener("contextmenu", (event) => {
+    button.addEventListener("contextmenu", (event) => {
       event.preventDefault();
-      showToast("按住左边猫猫 10 秒可切换猫娘模式喵~");
+      showToast("点击动作猫猫可展开动作轮盘喵~");
     });
   }
 
@@ -980,20 +1047,27 @@
     const panel = document.createElement("div");
     panel.id = "bcn-panel";
     panel.innerHTML = `
-      <button class="bcn-btn" id="bcn-wheel-handle" type="button" title="展开动作轮盘，按住可拖动">🐱</button>
+      <button class="bcn-btn" id="bcn-main-cat" type="button" title="展开猫猫菜单，按住可拖动，长按 10 秒切换猫娘模式">🐱</button>
+      <div id="bcn-submenu">
+        <button class="bcn-btn" id="bcn-wheel-handle" type="button" title="展开动作轮盘">🐱</button>
+        <button class="bcn-btn" id="bcn-face" type="button" title="打开猫猫颜文字，长按 2 秒也可打开">🐱</button>
+      </div>
       <div class="bcn-wheel-wrap">
         <div id="bcn-wheel"></div>
       </div>
       <div id="bcn-kaomoji-picker" aria-label="猫猫颜文字选择器"></div>
-      <button class="bcn-btn" id="bcn-face" type="button" title="打开猫猫颜文字，长按 2 秒也可打开">🐱</button>
     `;
     document.body.appendChild(panel);
 
+    const dragState = makePanelDraggable(panel);
+    const mainButton = document.getElementById("bcn-main-cat");
+    bindMainCatButton(mainButton, dragState);
+
     const faceButton = document.getElementById("bcn-face");
-    bindKaomojiButton(faceButton);
+    bindKaomojiButton(faceButton, dragState);
 
     const handleButton = document.getElementById("bcn-wheel-handle");
-    makePanelDraggable(panel, handleButton);
+    bindWheelButton(handleButton, dragState);
 
     syncWheelPosition(panel);
     renderWheel();
@@ -1302,10 +1376,17 @@
         background: rgba(255, 250, 252, 0.88);
         box-shadow: 0 10px 28px rgba(255, 143, 189, 0.28);
         backdrop-filter: blur(8px);
+        cursor: grab;
+        transition: gap 0.22s ease;
+      }
+
+      body.bcn-menu-collapsed #bcn-panel {
+        gap: 0;
       }
 
       #bcn-panel.is-dragging {
         user-select: none;
+        cursor: grabbing;
       }
 
       .bcn-btn,
@@ -1321,6 +1402,27 @@
         box-shadow: 0 3px 0 #f6b7ce;
       }
 
+      #bcn-submenu {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 8px;
+        max-width: 130px;
+        opacity: 1;
+        transform: translateX(0) scale(1);
+        overflow: hidden;
+        transition: max-width 0.22s ease, opacity 0.22s ease, transform 0.22s ease;
+        pointer-events: auto;
+      }
+
+      body.bcn-menu-collapsed #bcn-submenu {
+        max-width: 0;
+        opacity: 0;
+        transform: translateX(-8px) scale(0.96);
+        pointer-events: none;
+      }
+
+      #bcn-main-cat,
       #bcn-wheel-handle,
       #bcn-face {
         width: 52px;
@@ -1392,14 +1494,6 @@
         opacity: 0;
         transform: translateY(8px) scale(0.96);
         pointer-events: none;
-      }
-
-      #bcn-wheel-handle {
-        cursor: grab;
-      }
-
-      #bcn-wheel-handle:active {
-        cursor: grabbing;
       }
 
       #bcn-face.is-active {
