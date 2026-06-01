@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bondage Club 猫娘聊天室增强
 // @namespace    https://penyo.ru/
-// @version      2.8.2
+// @version      2.9.0
 // @description  Bondage Club 猫娘消息转换、聊天室美化、猫爪表情雨和动作快捷轮盘
 // @author       Penyo (Modified)
 // @match        *://www.bondageprojects.com/club_game*
@@ -34,7 +34,7 @@
 
   const W = typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
   const MOD_ID = "BCNekoEnhancer";
-  const VERSION = "2.8.2";
+  const VERSION = "2.9.0";
   const STORE_KEY = "bcNekoEnhancer.config.v2";
   const MOD_SDK_URL = "https://cdn.jsdelivr.net/npm/bondage-club-mod-sdk@1.2.0/dist/bcmodsdk.js";
   const ACTION_LIBRARY_URL = "https://raw.githubusercontent.com/QAQMOON/meow-/main/actions/catgirl-actions.json";
@@ -748,7 +748,8 @@
     const wheel = document.getElementById("bcn-wheel");
     if (!wheel) return;
     wheel.innerHTML = "";
-    getActiveActions().forEach((action, index) => {
+    const actions = getActiveActions().slice(0, 5);
+    actions.forEach((action, index) => {
       const btn = document.createElement("button");
       btn.className = "bcn-wheel-btn";
       btn.type = "button";
@@ -762,6 +763,12 @@
       });
       wheel.appendChild(btn);
     });
+    for (let index = actions.length; index < 6; index++) {
+      const blank = document.createElement("span");
+      blank.className = "bcn-wheel-blank";
+      blank.style.setProperty("--i", String(index));
+      wheel.appendChild(blank);
+    }
   }
 
   function renderKaomojiPicker() {
@@ -1496,33 +1503,35 @@
       }
 
       body.bcn-wheel-on .bcn-wheel-wrap {
-        max-width: 520px;
-        padding: 8px;
+        max-width: 560px;
+        padding: 12px;
         opacity: 1;
         transform: translateY(0) scale(1);
         pointer-events: auto;
       }
 
       .bcn-wheel-wrap,
-      .bcn-wheel-btn {
+      .bcn-wheel-btn,
+      .bcn-wheel-blank {
         transition: max-width 0.22s ease, opacity 0.22s ease, transform 0.22s ease, filter 0.22s ease, padding 0.22s ease;
       }
 
       #bcn-wheel {
         display: none;
-        gap: 8px;
-        max-width: min(58vw, 520px);
-        flex-wrap: wrap;
-        justify-content: flex-end;
+        grid-template-columns: repeat(3, minmax(82px, 1fr));
+        gap: 10px;
+        width: min(58vw, 360px);
+        max-width: 360px;
         align-items: center;
       }
 
       body.bcn-wheel-on #bcn-wheel,
       body.bcn-wheel-on .bcn-wheel-wrap #bcn-wheel {
-        display: flex;
+        display: grid;
       }
 
-      body.bcn-wheel-on .bcn-wheel-btn {
+      body.bcn-wheel-on .bcn-wheel-btn,
+      body.bcn-wheel-on .bcn-wheel-blank {
         animation: bcn-pop 0.24s ease both;
         animation-delay: calc(var(--i, 0) * 0.04s);
       }
@@ -1541,12 +1550,23 @@
       }
 
       .bcn-wheel-btn {
-        min-width: 50px;
+        min-width: 0;
+        min-height: 58px;
         padding: 0 14px;
-        font-size: 17px;
+        font-size: 19px;
       }
 
-      body.bcn-wheel-collapsed .bcn-wheel-btn {
+      .bcn-wheel-blank {
+        min-height: 58px;
+        border: 2px solid rgba(255, 159, 197, 0.64);
+        border-radius: 14px;
+        background: linear-gradient(180deg, rgba(255,255,255,0.72) 0%, rgba(255,232,241,0.54) 100%);
+        box-shadow: inset 0 0 0 1px rgba(255,255,255,0.52), 0 3px 0 rgba(246, 183, 206, 0.55);
+        pointer-events: none;
+      }
+
+      body.bcn-wheel-collapsed .bcn-wheel-btn,
+      body.bcn-wheel-collapsed .bcn-wheel-blank {
         opacity: 0;
         transform: translateX(-10px) scale(0.92);
         filter: blur(0.5px);
