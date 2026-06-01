@@ -24,6 +24,7 @@
 // @grant        GM_xmlhttpRequest
 // @grant        unsafeWindow
 // @connect      raw.githubusercontent.com
+// @connect      cdn.jsdelivr.net
 // @run-at       document-start
 // @license      WTFPL
 // ==/UserScript==

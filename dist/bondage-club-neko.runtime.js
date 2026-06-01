@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bondage Club 猫娘聊天室增强
 // @namespace    https://penyo.ru/
-// @version      2.7.0
+// @version      2.8.0
 // @description  Bondage Club 猫娘消息转换、聊天室美化、猫爪表情雨和动作快捷轮盘
 // @author       Penyo (Modified)
 // @match        *://www.bondageprojects.com/club_game*
@@ -24,6 +24,7 @@
 // @grant        GM_xmlhttpRequest
 // @grant        unsafeWindow
 // @connect      raw.githubusercontent.com
+// @connect      cdn.jsdelivr.net
 // @run-at       document-start
 // @license      WTFPL
 // ==/UserScript==
@@ -33,8 +34,9 @@
 
   const W = typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
   const MOD_ID = "BCNekoEnhancer";
-  const VERSION = "2.7.0";
+  const VERSION = "2.8.0";
   const STORE_KEY = "bcNekoEnhancer.config.v2";
+  const MOD_SDK_URL = "https://cdn.jsdelivr.net/npm/bondage-club-mod-sdk@1.2.0/dist/bcmodsdk.js";
   const ACTION_LIBRARY_URL = "https://raw.githubusercontent.com/QAQMOON/meow-/main/actions/catgirl-actions.json";
   const ACTION_LIBRARY_CACHE_KEY = "bcNekoEnhancer.actionLibrary.v1";
   const KAOMOJI_LIBRARY_URL = "https://raw.githubusercontent.com/QAQMOON/meow-/main/kaomoji/cute-kaomoji.json";
@@ -107,6 +109,8 @@
   let kaomojiLibrary = loadCachedKaomojiLibrary() || normalizeKaomojiLibrary(DEFAULT_KAOMOJI_LIBRARY);
   const processedMessages = new WeakSet();
   let patched = false;
+  let bcModApi = null;
+  let sdkLoadingPromise = null;
   let settingsRegistered = false;
   let toastTimer = 0;
   let activeKaomojiGroup = "all";
@@ -125,7 +129,7 @@
     sendAction: sendQuickAction,
     reloadActions: loadRemoteActionLibrary,
     reloadKaomoji: loadRemoteKaomojiLibrary,
-    status: () => ({ patched, enabled: config.enabled, screen: W.CurrentScreen, url: location.href }),
+    status: () => ({ patched, sdk: !!bcModApi, enabled: config.enabled, screen: W.CurrentScreen, url: location.href }),
   };
 
   function loadConfig() {
@@ -326,6 +330,43 @@
     });
   }
 
+  function loadModSdk() {
+    if (W.bcModSdk?.registerMod) {
+      return Promise.resolve(W.bcModSdk);
+    }
+    if (sdkLoadingPromise) return sdkLoadingPromise;
+    sdkLoadingPromise = requestText(MOD_SDK_URL).then((code) => new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.textContent = `${code}\n//# sourceURL=${MOD_SDK_URL}`;
+      script.onload = () => script.remove();
+      (document.head || document.documentElement).appendChild(script);
+      setTimeout(() => {
+        script.remove();
+        if (W.bcModSdk?.registerMod) resolve(W.bcModSdk);
+        else reject(new Error("BC mod SDK loaded without bcModSdk"));
+      }, 0);
+    }));
+    return sdkLoadingPromise;
+  }
+
+  function registerModSdk() {
+    return loadModSdk()
+      .then((sdk) => {
+        if (bcModApi) return bcModApi;
+        bcModApi = sdk.registerMod({
+          name: MOD_ID,
+          fullName: "Bondage Club 猫娘聊天室增强",
+          version: VERSION,
+        }, { allowReplace: true });
+        console.log("[BC 猫娘增强] BC Mod SDK 已注册喵~");
+        return bcModApi;
+      })
+      .catch((error) => {
+        console.warn("[BC 猫娘增强] BC Mod SDK 加载失败，稍后重试:", error);
+        return null;
+      });
+  }
+
   function clamp(value, min, max) {
     if (!Number.isFinite(value)) return min;
     return Math.min(max, Math.max(min, value));
@@ -463,36 +504,36 @@
   }
 
   function patchBC() {
-    if (patched || !W.ChatRoomGenerateChatRoomChatMessage || !W.ChatRoomMessageDisplay || !W.ServerSend) return false;
+    if (patched || !bcModApi || !W.ChatRoomGenerateChatRoomChatMessage || !W.ChatRoomMessageDisplay || !W.ServerSend) return false;
     patched = true;
 
-    const originalGenerate = W.ChatRoomGenerateChatRoomChatMessage;
-    W.ChatRoomGenerateChatRoomChatMessage = function (type, msg, replyId) {
-      const next = config.convertOutgoing ? convertByType(type, msg) : msg;
-      return originalGenerate.call(this, type, next, replyId);
-    };
+    bcModApi.hookFunction("ChatRoomGenerateChatRoomChatMessage", 0, (args, next) => {
+      const [type, msg, replyId] = args;
+      const nextMsg = config.convertOutgoing ? convertByType(type, msg) : msg;
+      return next([type, nextMsg, replyId]);
+    });
 
-    const originalDisplay = W.ChatRoomMessageDisplay;
-    W.ChatRoomMessageDisplay = function (data, msg, senderCharacter, metadata) {
-      const next = shouldConvertDisplay(data, msg) ? convertByType(data?.Type, msg) : msg;
-      const div = originalDisplay.call(this, data, next, senderCharacter, metadata);
+    bcModApi.hookFunction("ChatRoomMessageDisplay", 0, (args, next) => {
+      const [data, msg, senderCharacter, metadata] = args;
+      const nextMsg = shouldConvertDisplay(data, msg) ? convertByType(data?.Type, msg) : msg;
+      const div = next([data, nextMsg, senderCharacter, metadata]);
       decorateMessage(div, data);
       if (config.notifyIncoming && data?.Sender && !isOwnSender(data.Sender) && ["Chat", "Whisper"].includes(data.Type)) {
         showToast(data.Type === "Whisper" ? "悄悄喵~ 有私聊来了！" : "喵~ 新消息来啦！");
       }
       return div;
-    };
+    });
 
-    const originalSend = W.ServerSend;
-    W.ServerSend = function (message, ...args) {
+    bcModApi.hookFunction("ServerSend", 0, (args, next) => {
+      const [message, payload] = args;
       if (message === "ChatRoomChat" && config.enabled && config.rainOnSend) {
-        const type = args[0]?.Type;
+        const type = payload?.Type;
         if (["Chat", "Whisper", "Emote", "Action"].includes(type)) pawRain(type);
       }
-      return originalSend.call(this, message, ...args);
-    };
+      return next(args);
+    });
 
-    console.log("[BC 猫娘增强] 已接入聊天函数喵~");
+    console.log("[BC 猫娘增强] 已通过 BC Mod SDK 接入聊天函数喵~");
     return true;
   }
 
@@ -1846,6 +1887,7 @@
   function init() {
     installStyles();
     createPanel();
+    registerModSdk();
     loadRemoteActionLibrary();
     loadRemoteKaomojiLibrary();
     installObserver();
