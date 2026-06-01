@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bondage Club 猫娘聊天室增强
 // @namespace    https://penyo.ru/
-// @version      2.3.0
+// @version      2.4.0
 // @description  Bondage Club 猫娘消息转换、聊天室美化、猫爪表情雨和动作快捷轮盘
 // @author       Penyo (Modified)
 // @match        *://www.bondageprojects.com/club_game*
@@ -33,11 +33,13 @@
 
   const W = typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
   const MOD_ID = "BCNekoEnhancer";
-  const VERSION = "2.3.0";
+  const VERSION = "2.4.0";
   const STORE_KEY = "bcNekoEnhancer.config.v2";
   const ACTION_LIBRARY_URL = "https://raw.githubusercontent.com/QAQMOON/meow-/main/actions/catgirl-actions.json";
   const ACTION_LIBRARY_CACHE_KEY = "bcNekoEnhancer.actionLibrary.v1";
-  const KAOMOJI = ["(=^･ω･^=)", "ฅ(•ㅅ•❀)ฅ", "(=｀ω´=)", "(ฅ´ω`ฅ)", "(=^･ｪ･^=)"];
+  const KAOMOJI_LIBRARY_URL = "https://raw.githubusercontent.com/QAQMOON/meow-/main/kaomoji/cute-kaomoji.json";
+  const KAOMOJI_LIBRARY_CACHE_KEY = "bcNekoEnhancer.kaomojiLibrary.v1";
+  const DEFAULT_KAOMOJI = ["(=^･ω･^=)", "ฅ(•ㅅ•❀)ฅ", "(=｀ω´=)", "(ฅ´ω`ฅ)", "(=^･ｪ･^=)"];
   const ACTION_TARGET_MODE = {
     AUTO: "auto",
     PICKER: "picker",
@@ -87,8 +89,21 @@
     })),
   };
 
+  const DEFAULT_KAOMOJI_LIBRARY = {
+    version: "builtin",
+    groups: [
+      {
+        id: "cat",
+        label: "猫猫",
+        enabled: true,
+        items: DEFAULT_KAOMOJI,
+      },
+    ],
+  };
+
   const config = loadConfig();
   let actionLibrary = loadCachedActionLibrary() || normalizeActionLibrary(DEFAULT_ACTION_LIBRARY);
+  let kaomojiLibrary = loadCachedKaomojiLibrary() || normalizeKaomojiLibrary(DEFAULT_KAOMOJI_LIBRARY);
   const processedMessages = new WeakSet();
   let patched = false;
   let settingsRegistered = false;
@@ -98,12 +113,14 @@
   W.BCNekoEnhancer = {
     config,
     actionLibrary: () => actionLibrary,
+    kaomojiLibrary: () => kaomojiLibrary,
     version: VERSION,
     insertFace,
     toggle: toggleNekoMode,
     rain: pawRain,
     sendAction: sendQuickAction,
     reloadActions: loadRemoteActionLibrary,
+    reloadKaomoji: loadRemoteKaomojiLibrary,
     status: () => ({ patched, enabled: config.enabled, screen: W.CurrentScreen, url: location.href }),
   };
 
@@ -184,7 +201,7 @@
   }
 
   function loadRemoteActionLibrary() {
-    return requestActionLibraryText(ACTION_LIBRARY_URL)
+    return requestText(ACTION_LIBRARY_URL)
       .then((text) => {
         const library = normalizeActionLibrary(JSON.parse(text));
         actionLibrary = library;
@@ -199,7 +216,79 @@
       });
   }
 
-  function requestActionLibraryText(url) {
+  function normalizeKaomojiLibrary(source) {
+    const groups = Array.isArray(source?.groups) ? source.groups : [];
+    const normalized = groups
+      .map((group, index) => {
+        const items = Array.isArray(group.items)
+          ? group.items.map((item) => String(item || "").trim()).filter(Boolean)
+          : [];
+        if (!items.length) return null;
+        return {
+          id: String(group.id || `group-${index}`).trim() || `group-${index}`,
+          label: String(group.label || group.id || "颜文字").trim().slice(0, 12),
+          enabled: group.enabled !== false,
+          items,
+        };
+      })
+      .filter(Boolean);
+    return {
+      version: String(source?.version || "unknown"),
+      updatedAt: source?.updatedAt || "",
+      groups: normalized.length ? normalized : DEFAULT_KAOMOJI_LIBRARY.groups,
+    };
+  }
+
+  function getActiveKaomojiItems() {
+    const items = kaomojiLibrary.groups
+      .filter((group) => group.enabled !== false)
+      .flatMap((group) => group.items)
+      .filter(Boolean);
+    return items.length ? items : DEFAULT_KAOMOJI;
+  }
+
+  function pickRandomKaomoji() {
+    const items = getActiveKaomojiItems();
+    return items[Math.floor(Math.random() * items.length)] || DEFAULT_KAOMOJI[0];
+  }
+
+  function hasKnownKaomoji(text) {
+    return getActiveKaomojiItems().some((face) => text.includes(face));
+  }
+
+  function loadCachedKaomojiLibrary() {
+    try {
+      const raw = localStorage.getItem(KAOMOJI_LIBRARY_CACHE_KEY);
+      return raw ? normalizeKaomojiLibrary(JSON.parse(raw)) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function cacheKaomojiLibrary(library) {
+    try {
+      localStorage.setItem(KAOMOJI_LIBRARY_CACHE_KEY, JSON.stringify(library));
+    } catch {
+      // Ignore storage failures; the builtin kaomoji library still works.
+    }
+  }
+
+  function loadRemoteKaomojiLibrary() {
+    return requestText(KAOMOJI_LIBRARY_URL)
+      .then((text) => {
+        const library = normalizeKaomojiLibrary(JSON.parse(text));
+        kaomojiLibrary = library;
+        cacheKaomojiLibrary(library);
+        console.log(`[BC 猫娘增强] 颜文字库已加载: ${library.version}, ${getActiveKaomojiItems().length} 个颜文字`);
+        return library;
+      })
+      .catch((error) => {
+        console.warn("[BC 猫娘增强] 远程颜文字库加载失败，使用缓存/内置库:", error);
+        return kaomojiLibrary;
+      });
+  }
+
+  function requestText(url) {
     if (typeof GM_xmlhttpRequest === "function") {
       return new Promise((resolve, reject) => {
         GM_xmlhttpRequest({
@@ -290,8 +379,8 @@
 
   function emoteNeko(text) {
     text = relationHonorific(standardNeko(text || ""));
-    if (KAOMOJI.some((face) => text.includes(face))) return text;
-    return `${text} ${KAOMOJI[Math.floor(Math.random() * KAOMOJI.length)]}`;
+    if (hasKnownKaomoji(text)) return text;
+    return `${text} ${pickRandomKaomoji()}`;
   }
 
   function whisperNeko(text) {
@@ -411,7 +500,7 @@
 
   function insertFace() {
     const input = getChatInput();
-    const face = KAOMOJI[Math.floor(Math.random() * KAOMOJI.length)];
+    const face = pickRandomKaomoji();
     if (!input) {
       showToast("还没找到聊天框，进入聊天室后再点喵~");
       return;
@@ -1374,6 +1463,7 @@
     installStyles();
     createPanel();
     loadRemoteActionLibrary();
+    loadRemoteKaomojiLibrary();
     installObserver();
     syncScreenClass();
 

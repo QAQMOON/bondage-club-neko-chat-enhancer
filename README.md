@@ -9,6 +9,7 @@
 - 聊天室美化与猫爪表情雨
 - 右下角动作快捷轮盘
 - GitHub 远程动作库，支持后续扩展更多动作主题
+- GitHub 远程颜文字库，支持后续扩展更多猫猫颜文字分类
 - 扩展组件设置页，支持细项开关和概率调节
 - 动作可自动选目标、手动选目标，或只对自己生效
 
@@ -47,6 +48,30 @@ https://github.com/QAQMOON/meow-/blob/main/actions/catgirl-actions.json
 ```
 
 `label` 会显示在动作轮盘按钮上；`self` 用于没有目标或只对自己时；`target` 用于对其他角色释放时。
+
+## 颜文字库
+
+颜文字库放在：
+
+https://github.com/QAQMOON/meow-/blob/main/kaomoji/cute-kaomoji.json
+
+插件启动时会尝试从 GitHub 加载颜文字库；如果加载失败，会使用上次缓存，缓存也没有时会使用内置默认猫猫颜文字。
+
+新增颜文字时，在对应分类的 `items` 数组里追加字符串即可。新增分类时，在 `groups` 数组里追加一项：
+
+```json
+{
+  "id": "kiss",
+  "label": "亲亲",
+  "enabled": true,
+  "items": [
+    "( ˘ ³˘)♥",
+    "(๑˘ ³˘๑)"
+  ]
+}
+```
+
+`enabled` 设为 `false` 可以暂时禁用某个分类；插件会从所有启用分类里随机抽取颜文字。
 
 ## 说明
 
