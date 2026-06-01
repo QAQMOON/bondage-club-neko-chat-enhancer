@@ -1,6 +1,6 @@
 # Bondage Club 猫娘聊天室增强
 
-一个给 Bondage Club 用的猫娘主题 userscript，主打聊天语气转换、聊天美化和动作轮盘。
+一个给 Bondage Club 用的猫娘主题。
 
 ## 功能
 
