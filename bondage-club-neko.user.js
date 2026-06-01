@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bondage Club 猫娘聊天室增强
 // @namespace    https://penyo.ru/
-// @version      2.5.0
+// @version      2.6.0
 // @description  Bondage Club 猫娘消息转换、聊天室美化、猫爪表情雨和动作快捷轮盘
 // @author       Penyo (Modified)
 // @match        *://www.bondageprojects.com/club_game*
@@ -33,7 +33,7 @@
 
   const W = typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
   const MOD_ID = "BCNekoEnhancer";
-  const VERSION = "2.5.0";
+  const VERSION = "2.6.0";
   const STORE_KEY = "bcNekoEnhancer.config.v2";
   const ACTION_LIBRARY_URL = "https://raw.githubusercontent.com/QAQMOON/meow-/main/actions/catgirl-actions.json";
   const ACTION_LIBRARY_CACHE_KEY = "bcNekoEnhancer.actionLibrary.v1";
@@ -343,7 +343,9 @@
     const handleButton = document.getElementById("bcn-wheel-handle");
     if (handleButton) {
       handleButton.textContent = config.wheelCollapsed ? "🐱" : "🐱";
-      handleButton.title = config.wheelCollapsed ? "展开动作轮盘，按住可拖动" : "收起动作轮盘，按住可拖动";
+      handleButton.title = config.wheelCollapsed
+        ? "展开动作轮盘，按住可拖动，长按 10 秒切换猫娘模式"
+        : "收起动作轮盘，按住可拖动，长按 10 秒切换猫娘模式";
     }
   }
 
@@ -422,6 +424,15 @@
     return text;
   }
 
+  function shouldConvertDisplay(data, msg) {
+    if (!config.enabled || !config.convertDisplayed || !msg) return false;
+    const type = data?.Type;
+    if (type === "Whisper" && String(msg).startsWith("悄悄喵~")) return false;
+    if ((type === "Action" || type === "Activity") && /喵喵[）)]?$/.test(String(msg))) return false;
+    if (type === "Emote" && hasKnownKaomoji(String(msg))) return false;
+    return ["Chat", "Whisper", "Emote", "Action", "Activity"].includes(type);
+  }
+
   function isOwnSender(sender) {
     return Number(sender) === Number(W.Player?.MemberNumber);
   }
@@ -456,7 +467,7 @@
 
     const originalDisplay = W.ChatRoomMessageDisplay;
     W.ChatRoomMessageDisplay = function (data, msg, senderCharacter, metadata) {
-      const next = config.convertDisplayed && !isOwnSender(data?.Sender) ? convertByType(data?.Type, msg) : msg;
+      const next = shouldConvertDisplay(data, msg) ? convertByType(data?.Type, msg) : msg;
       const div = originalDisplay.call(this, data, next, senderCharacter, metadata);
       decorateMessage(div, data);
       if (config.notifyIncoming && data?.Sender && !isOwnSender(data.Sender) && ["Chat", "Whisper"].includes(data.Type)) {
@@ -867,14 +878,22 @@
   function makePanelDraggable(panel, handle) {
     let dragging = false;
     let moved = false;
+    let longPressTimer = 0;
+    let longPressTriggered = false;
     let startX = 0;
     let startY = 0;
     let originLeft = 0;
     let originTop = 0;
 
+    const clearLongPress = () => {
+      clearTimeout(longPressTimer);
+      longPressTimer = 0;
+    };
+
     const stopDrag = () => {
       if (!dragging) return;
       dragging = false;
+      clearLongPress();
       panel.classList.remove("is-dragging");
       if (moved) saveConfig();
       document.removeEventListener("pointermove", onMove);
@@ -885,7 +904,10 @@
       if (!dragging) return;
       const dx = event.clientX - startX;
       const dy = event.clientY - startY;
-      if (!moved && Math.hypot(dx, dy) > 5) moved = true;
+      if (!moved && Math.hypot(dx, dy) > 5) {
+        moved = true;
+        clearLongPress();
+      }
       if (!moved) return;
       const pos = clampPanelPosition(panel, originLeft + dx, originTop + dy);
       panel.style.left = `${pos.left}px`;
@@ -906,21 +928,30 @@
       event.preventDefault();
       dragging = true;
       moved = false;
+      longPressTriggered = false;
       startX = event.clientX;
       startY = event.clientY;
       originLeft = panel.getBoundingClientRect().left;
       originTop = panel.getBoundingClientRect().top;
       panel.classList.add("is-dragging");
       handle.setPointerCapture?.(event.pointerId);
+      clearLongPress();
+      longPressTimer = setTimeout(() => {
+        if (!dragging || moved) return;
+        longPressTriggered = true;
+        stopDrag();
+        toggleNekoMode();
+      }, 10000);
       document.addEventListener("pointermove", onMove);
       document.addEventListener("pointerup", onUp);
     });
 
     handle.addEventListener("click", (event) => {
-      if (moved) {
+      if (moved || longPressTriggered) {
         event.preventDefault();
         event.stopPropagation();
         moved = false;
+        longPressTriggered = false;
         return;
       }
       toggleWheelCollapsed();
@@ -928,7 +959,7 @@
 
     handle.addEventListener("contextmenu", (event) => {
       event.preventDefault();
-      toggleConfig("enabled");
+      showToast("按住左边猫猫 10 秒可切换猫娘模式喵~");
     });
   }
 
