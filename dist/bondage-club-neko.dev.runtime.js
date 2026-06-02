@@ -682,6 +682,66 @@
     return Number(sender) === Number(W.Player?.MemberNumber);
   }
 
+  function getCharacterByMemberNumber(memberNumber) {
+    const value = memberNumberOf(memberNumber);
+    if (!value) return null;
+    if (memberNumberOf(W.Player) === value) return W.Player || null;
+    return W.ChatRoomCharacter?.find?.((character) => memberNumberOf(character) === value) || null;
+  }
+
+  function matchRelationshipMember(entry, playerNumber) {
+    return memberNumberOf(entry) === playerNumber
+      || memberNumberOf(entry?.MemberNumber) === playerNumber
+      || memberNumberOf(entry?.Lover) === playerNumber
+      || memberNumberOf(entry?.LoverMemberNumber) === playerNumber
+      || memberNumberOf(entry?.MemberNumber1) === playerNumber
+      || memberNumberOf(entry?.MemberNumber2) === playerNumber;
+  }
+
+  function isOwnedByPlayer(character) {
+    const playerNumber = memberNumberOf(W.Player);
+    if (!playerNumber || !character) return false;
+    return memberNumberOf(character.Owner) === playerNumber
+      || memberNumberOf(character.OwnerNumber) === playerNumber
+      || memberNumberOf(character.Ownership?.MemberNumber) === playerNumber
+      || memberNumberOf(character.Ownership?.OwnerMemberNumber) === playerNumber
+      || memberNumberOf(character.Ownership?.Owner) === playerNumber;
+  }
+
+  function isLoverOfPlayer(character) {
+    const playerNumber = memberNumberOf(W.Player);
+    if (!playerNumber || !character) return false;
+    const sources = [
+      ...(Array.isArray(character.Lovership) ? character.Lovership : []),
+      ...(Array.isArray(character.Lover) ? character.Lover : []),
+      ...(Array.isArray(character.LoverMemberNumber) ? character.LoverMemberNumber : []),
+      ...(Array.isArray(character.Lovers) ? character.Lovers : []),
+    ];
+    return sources.some((entry) => matchRelationshipMember(entry, playerNumber));
+  }
+
+  function getRelationshipStatus(sender) {
+    const character = getCharacterByMemberNumber(sender);
+    if (!character || memberNumberOf(character) === memberNumberOf(W.Player)) return null;
+    const owner = isOwnedByPlayer(character);
+    const lover = isLoverOfPlayer(character);
+    if (owner && lover) return "dual";
+    if (owner) return "owner";
+    if (lover) return "lover";
+    return null;
+  }
+
+  function applyRelationshipBadge(div, relation) {
+    const nameEl = div?.querySelector?.(".ChatMessageName");
+    if (!nameEl || nameEl.dataset.bcnRelationBadge === "1") return;
+    const icon = document.createElement("span");
+    icon.className = `bcn-relation-badge bcn-relation-badge-${relation}`;
+    icon.textContent = relation === "owner" ? "🐾" : relation === "lover" ? "❤" : "❤🐾";
+    icon.setAttribute("aria-hidden", "true");
+    nameEl.prepend(icon);
+    nameEl.dataset.bcnRelationBadge = "1";
+  }
+
   function isBugPeerSender(sender) {
     const memberNumber = memberNumberOf(sender);
     if (!memberNumber) return false;
@@ -698,6 +758,13 @@
 
     if (isOwnSender(data?.Sender || div.dataset.sender)) {
       div.classList.add("bcn-own-message");
+    }
+
+    const relation = getRelationshipStatus(data?.Sender || div.dataset.sender);
+    if (relation) {
+      div.classList.add("bcn-related-message", `bcn-related-${relation}`);
+      div.dataset.bcnRelation = relation;
+      applyRelationshipBadge(div, relation);
     }
 
     if (config.decorateChat) {
@@ -2414,6 +2481,53 @@
         color: var(--label-color, var(--bcn-text)) !important;
         text-shadow: 0 1px 0 #fff !important;
         font-weight: 800;
+      }
+
+      #TextAreaChatLog .bcn-relation-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 1.15em;
+        margin-right: 0.2em;
+        font-size: 0.92em;
+        vertical-align: baseline;
+      }
+
+      #TextAreaChatLog .bcn-related-owner {
+        border-color: #f2d087 !important;
+        box-shadow: 0 4px 14px rgba(232, 184, 88, 0.16);
+      }
+
+      #TextAreaChatLog .bcn-related-owner .ChatMessageName {
+        color: #af7f22 !important;
+      }
+
+      #TextAreaChatLog .bcn-related-owner .bcn-relation-badge {
+        color: #dfb24c;
+        text-shadow: 0 1px 0 #fff6df, 0 0 8px rgba(240, 191, 92, 0.24);
+      }
+
+      #TextAreaChatLog .bcn-related-lover .ChatMessageName {
+        color: #d06b96 !important;
+      }
+
+      #TextAreaChatLog .bcn-related-lover .bcn-relation-badge {
+        color: #f08db4;
+        text-shadow: 0 1px 0 #fff4f8, 0 0 8px rgba(240, 141, 180, 0.2);
+      }
+
+      #TextAreaChatLog .bcn-related-dual {
+        border-color: #e9be93 !important;
+        box-shadow: 0 4px 16px rgba(232, 166, 120, 0.18);
+      }
+
+      #TextAreaChatLog .bcn-related-dual .ChatMessageName {
+        color: #c68463 !important;
+      }
+
+      #TextAreaChatLog .bcn-related-dual .bcn-relation-badge {
+        color: #d88b8b;
+        text-shadow: 0 1px 0 #fff6f8, 0 0 8px rgba(226, 169, 119, 0.22);
       }
 
       body.bcn-enabled input,
