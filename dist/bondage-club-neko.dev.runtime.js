@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bondage Club 猫娘聊天室增强
 // @namespace    https://penyo.ru/
-// @version      2.10.1
+// @version      2.10.2
 // @description  Bondage Club 猫娘消息转换、聊天室美化、猫爪表情雨和动作快捷轮盘
 // @author       Penyo (Modified)
 // @match        *://www.bondageprojects.com/club_game*
@@ -34,7 +34,7 @@
 
   const W = typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
   const MOD_ID = "BCNekoEnhancer";
-  const VERSION = "2.10.1";
+  const VERSION = "2.10.2";
   const STORE_KEY = "bcNekoEnhancer.config.v2";
   const MOD_SDK_URL = "https://cdn.jsdelivr.net/npm/bondage-club-mod-sdk@1.2.0/dist/bcmodsdk.js";
   const ACTION_LIBRARY_URL = "https://raw.githubusercontent.com/QAQMOON/meow-/main/actions/catgirl-actions.json";
@@ -648,8 +648,86 @@
       return next(args);
     });
 
+    if (typeof W.CharacterDraw === "function") {
+      bcModApi.hookFunction("CharacterDraw", 0, (args, next) => {
+        const result = next(args);
+        drawOwnCharacterBadge(args);
+        return result;
+      });
+    }
+
     console.log("[BC 猫娘增强] 已通过 BC Mod SDK 接入聊天函数喵~");
     return true;
+  }
+
+  function drawOwnCharacterBadge(drawArgs) {
+    const character = drawArgs?.[0];
+    if (!character || W.CurrentScreen !== "ChatRoom") return;
+    if (Number(character.MemberNumber) !== Number(W.Player?.MemberNumber)) return;
+
+    const x = Number(drawArgs?.[1]);
+    const y = Number(drawArgs?.[2]);
+    const zoom = Number(drawArgs?.[3]) || 1;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+
+    const canvas = getMainCanvasContext();
+    if (!canvas) return;
+
+    const size = Math.max(18, Math.min(30, 26 * zoom));
+    const badgeX = x + 472 * zoom;
+    const badgeY = y + 30 * zoom;
+    drawCatBadge(canvas, badgeX, badgeY, size);
+  }
+
+  function getMainCanvasContext() {
+    const canvas = W.MainCanvas;
+    if (canvas && typeof canvas.save === "function") return canvas;
+    if (canvas && typeof canvas.getContext === "function") return canvas.getContext("2d");
+    return document.getElementById("MainCanvas")?.getContext?.("2d") || null;
+  }
+
+  function drawCatBadge(canvas, x, y, size) {
+    const theme = currentTheme();
+    const r = size / 2;
+    canvas.save();
+    canvas.lineCap = "round";
+    canvas.lineJoin = "round";
+    canvas.shadowColor = theme.glow;
+    canvas.shadowBlur = Math.max(4, size * 0.3);
+
+    canvas.fillStyle = "rgba(255, 255, 255, 0.92)";
+    canvas.strokeStyle = theme.accent;
+    canvas.lineWidth = Math.max(1.5, size * 0.08);
+
+    canvas.beginPath();
+    canvas.moveTo(x - r * 0.78, y - r * 0.05);
+    canvas.lineTo(x - r * 0.54, y - r * 0.9);
+    canvas.lineTo(x - r * 0.12, y - r * 0.42);
+    canvas.lineTo(x + r * 0.12, y - r * 0.42);
+    canvas.lineTo(x + r * 0.54, y - r * 0.9);
+    canvas.lineTo(x + r * 0.78, y - r * 0.05);
+    canvas.arc(x, y, r * 0.78, Math.PI * 0.05, Math.PI * 0.95, false);
+    canvas.closePath();
+    canvas.fill();
+    canvas.stroke();
+
+    canvas.fillStyle = theme.text;
+    canvas.beginPath();
+    canvas.arc(x - r * 0.28, y - r * 0.02, r * 0.08, 0, Math.PI * 2);
+    canvas.arc(x + r * 0.28, y - r * 0.02, r * 0.08, 0, Math.PI * 2);
+    canvas.fill();
+
+    canvas.strokeStyle = theme.text;
+    canvas.lineWidth = Math.max(1.2, size * 0.055);
+    canvas.beginPath();
+    canvas.moveTo(x, y + r * 0.09);
+    canvas.lineTo(x, y + r * 0.18);
+    canvas.moveTo(x, y + r * 0.18);
+    canvas.quadraticCurveTo(x - r * 0.13, y + r * 0.28, x - r * 0.28, y + r * 0.19);
+    canvas.moveTo(x, y + r * 0.18);
+    canvas.quadraticCurveTo(x + r * 0.13, y + r * 0.28, x + r * 0.28, y + r * 0.19);
+    canvas.stroke();
+    canvas.restore();
   }
 
   function decorateExistingChat() {
