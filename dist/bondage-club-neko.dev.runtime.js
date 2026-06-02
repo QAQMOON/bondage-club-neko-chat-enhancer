@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bondage Club 猫娘聊天室增强
 // @namespace    https://penyo.ru/
-// @version      2.10.4
+// @version      2.10.5
 // @description  Bondage Club 猫娘消息转换、聊天室美化、猫爪表情雨和动作快捷轮盘
 // @author       Penyo (Modified)
 // @match        *://www.bondageprojects.com/club_game*
@@ -34,13 +34,17 @@
 
   const W = typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
   const MOD_ID = "BCNekoEnhancer";
-  const VERSION = "2.10.4";
+  const VERSION = "2.10.5";
   const STORE_KEY = "bcNekoEnhancer.config.v2";
   const MOD_SDK_URL = "https://cdn.jsdelivr.net/npm/bondage-club-mod-sdk@1.2.0/dist/bcmodsdk.js";
   const ACTION_LIBRARY_URL = "https://raw.githubusercontent.com/QAQMOON/meow-/main/actions/catgirl-actions.json";
   const ACTION_LIBRARY_CACHE_KEY = "bcNekoEnhancer.actionLibrary.v1";
   const KAOMOJI_LIBRARY_URL = "https://raw.githubusercontent.com/QAQMOON/meow-/main/kaomoji/cute-kaomoji.json";
   const KAOMOJI_LIBRARY_CACHE_KEY = "bcNekoEnhancer.kaomojiLibrary.v1";
+  const PEER_SIGNAL_CONTENT = "BCNekoEnhancer.Hello";
+  const PEER_SIGNAL_INTERVAL = 45000;
+  const PEER_TTL = 300000;
+  const ATMOSPHERE_KEYWORDS = /喵|蹭蹭|蹭|贴贴|抱抱|摸摸|摸头|亲亲|ฅ|🐾|💗|💕|💖/i;
   const DEFAULT_KAOMOJI = ["(=^･ω･^=)", "ฅ(•ㅅ•❀)ฅ", "(=｀ω´=)", "(ฅ´ω`ฅ)", "(=^･ｪ･^=)"];
   const ACTION_TARGET_MODE = {
     AUTO: "auto",
@@ -178,13 +182,21 @@
   let actionLibrary = loadCachedActionLibrary() || normalizeActionLibrary(DEFAULT_ACTION_LIBRARY);
   let kaomojiLibrary = loadCachedKaomojiLibrary() || normalizeKaomojiLibrary(DEFAULT_KAOMOJI_LIBRARY);
   const processedMessages = new WeakSet();
+  const atmosphereMessages = new WeakSet();
   let patched = false;
   let statusBadgePatched = false;
+  let roomEffectsPatched = false;
   let bcModApi = null;
   let sdkLoadingPromise = null;
   let settingsRegistered = false;
   let toastTimer = 0;
   let activeKaomojiGroup = "all";
+  let lastPeerSignalAt = 0;
+  let lastPeerRoom = "";
+  const nekoPeers = new Map();
+  const badgeHitboxes = new Map();
+  const characterAnchors = new Map();
+  const atmosphereParticles = [];
 
   console.log(`[BC 猫娘增强] v${VERSION} userscript injected:`, location.href);
   W.BCNekoEnhancer = {
@@ -632,6 +644,8 @@
 
     bcModApi.hookFunction("ChatRoomMessageDisplay", 0, (args, next) => {
       const [data, msg, senderCharacter, metadata] = args;
+      handleNekoPeerSignal(data);
+      maybeSpawnAtmosphere(data, msg);
       const nextMsg = shouldConvertDisplay(data, msg) ? convertByType(data?.Type, msg) : msg;
       const div = next([data, nextMsg, senderCharacter, metadata]);
       decorateMessage(div, data);
@@ -650,6 +664,15 @@
       return next(args);
     });
 
+    if (typeof W.ChatRoomMessage === "function") {
+      bcModApi.hookFunction("ChatRoomMessage", 0, (args, next) => {
+        const [data] = args;
+        handleNekoPeerSignal(data);
+        maybeSpawnAtmosphere(data, data?.Content);
+        return next(args);
+      });
+    }
+
     console.log("[BC 猫娘增强] 已通过 BC Mod SDK 接入聊天函数喵~");
     return true;
   }
@@ -661,6 +684,7 @@
 
     bcModApi.hookFunction("ChatRoomDrawCharacterStatusIcons", 10, (args, next) => {
       const result = next(args);
+      rememberCharacterAnchorFromDraw(args);
       drawOwnCharacterBadge(args);
       return result;
     });
@@ -669,10 +693,27 @@
     return true;
   }
 
+  function patchRoomEffects() {
+    if (roomEffectsPatched) return true;
+    if (!bcModApi || typeof W.ChatRoomRun !== "function") return false;
+    roomEffectsPatched = true;
+
+    bcModApi.hookFunction("ChatRoomRun", 10, (args, next) => {
+      const result = next(args);
+      sendNekoPeerSignal(false);
+      drawAtmosphereParticles();
+      drawNekoBadgeTooltip();
+      return result;
+    });
+
+    console.log("[BC Neko Enhancer] room neko effects hooked");
+    return true;
+  }
+
   function drawOwnCharacterBadge(drawArgs) {
     const character = drawArgs?.[0];
     if (!character || W.CurrentScreen !== "ChatRoom") return;
-    if (Number(character.MemberNumber) !== Number(W.Player?.MemberNumber)) return;
+    if (!shouldShowNekoBadge(character)) return;
 
     const charX = Number(drawArgs?.[1]);
     const charY = Number(drawArgs?.[2]);
@@ -682,6 +723,8 @@
     const size = 35 * zoom;
     const badgeX = charX + 477.5 * zoom;
     const badgeY = charY + 22.5 * zoom;
+    rememberCharacterAnchor(character, charX, charY, zoom);
+    rememberBadgeHitbox(character, badgeX, badgeY, size);
     drawCatBadge(badgeX, badgeY, size);
   }
 
@@ -701,6 +744,184 @@
     canvas.shadowBlur = Math.max(2, size * 0.16);
     canvas.fillText("\uD83D\uDC31", x, y);
     canvas.restore();
+  }
+
+  function memberNumberOf(characterOrNumber) {
+    const memberNumber = typeof characterOrNumber === "object" ? characterOrNumber?.MemberNumber : characterOrNumber;
+    const value = Number(memberNumber);
+    return Number.isFinite(value) ? value : null;
+  }
+
+  function shouldShowNekoBadge(character) {
+    const memberNumber = memberNumberOf(character);
+    if (!memberNumber) return false;
+    if (memberNumber === memberNumberOf(W.Player)) return true;
+    cleanupNekoPeers();
+    return nekoPeers.has(memberNumber);
+  }
+
+  function rememberCharacterAnchorFromDraw(drawArgs) {
+    const character = drawArgs?.[0];
+    const charX = Number(drawArgs?.[1]);
+    const charY = Number(drawArgs?.[2]);
+    const zoom = Number(drawArgs?.[3]) || 1;
+    if (!character || !Number.isFinite(charX) || !Number.isFinite(charY)) return;
+    rememberCharacterAnchor(character, charX, charY, zoom);
+  }
+
+  function rememberCharacterAnchor(character, charX, charY, zoom) {
+    const memberNumber = memberNumberOf(character);
+    if (!memberNumber) return;
+    characterAnchors.set(memberNumber, {
+      x: charX + 250 * zoom,
+      y: charY + 65 * zoom,
+      zoom,
+      time: Date.now(),
+    });
+  }
+
+  function rememberBadgeHitbox(character, x, y, size) {
+    const memberNumber = memberNumberOf(character);
+    if (!memberNumber) return;
+    badgeHitboxes.set(memberNumber, {
+      x: x - size / 2,
+      y: y - size / 2,
+      w: size,
+      h: size,
+      cx: x,
+      cy: y,
+      time: Date.now(),
+    });
+  }
+
+  function handleNekoPeerSignal(data) {
+    if (!data || data.Type !== "Hidden" || data.Content !== PEER_SIGNAL_CONTENT) return;
+    const memberNumber = memberNumberOf(data.Sender);
+    if (!memberNumber || memberNumber === memberNumberOf(W.Player)) return;
+    const info = Array.isArray(data.Dictionary) ? data.Dictionary[0] || {} : {};
+    nekoPeers.set(memberNumber, {
+      version: String(info.version || "unknown"),
+      time: Date.now(),
+    });
+    sendNekoPeerSignal(false);
+  }
+
+  function sendNekoPeerSignal(force) {
+    if (W.CurrentScreen !== "ChatRoom" || typeof W.ServerSend !== "function" || !W.Player?.MemberNumber) return;
+    const roomKey = String(W.ChatRoomData?.Name || W.ChatRoomData?.Background || W.CurrentScreen || "ChatRoom");
+    const now = Date.now();
+    if (roomKey !== lastPeerRoom) {
+      lastPeerRoom = roomKey;
+      lastPeerSignalAt = 0;
+      badgeHitboxes.clear();
+      characterAnchors.clear();
+    }
+    if (!force && now - lastPeerSignalAt < PEER_SIGNAL_INTERVAL) return;
+    lastPeerSignalAt = now;
+    try {
+      W.ServerSend("ChatRoomChat", {
+        Type: "Hidden",
+        Content: PEER_SIGNAL_CONTENT,
+        Sender: W.Player.MemberNumber,
+        Dictionary: [{ mod: MOD_ID, version: VERSION }],
+      });
+    } catch (error) {
+      console.warn("[BC Neko Enhancer] failed to send peer signal", error);
+    }
+  }
+
+  function cleanupNekoPeers() {
+    const now = Date.now();
+    for (const [memberNumber, peer] of nekoPeers) {
+      if (now - peer.time > PEER_TTL) nekoPeers.delete(memberNumber);
+    }
+    for (const [memberNumber, hitbox] of badgeHitboxes) {
+      const active = memberNumber === memberNumberOf(W.Player) || nekoPeers.has(memberNumber);
+      if (now - hitbox.time > 1200 || !active) badgeHitboxes.delete(memberNumber);
+    }
+    for (const [memberNumber, anchor] of characterAnchors) {
+      if (now - anchor.time > 3000) characterAnchors.delete(memberNumber);
+    }
+  }
+
+  function maybeSpawnAtmosphere(data, message) {
+    if (!data || data.Type === "Hidden" || atmosphereMessages.has(data)) return;
+    const type = data.Type;
+    if (!["Chat", "Whisper", "Emote", "Action", "Activity"].includes(type)) return;
+    const text = String(message || data.Content || "");
+    if (!ATMOSPHERE_KEYWORDS.test(text)) return;
+    atmosphereMessages.add(data);
+    spawnAtmosphereForMember(data.Sender);
+  }
+
+  function spawnAtmosphereForMember(sender) {
+    const memberNumber = memberNumberOf(sender);
+    const anchor = characterAnchors.get(memberNumber) || characterAnchors.get(memberNumberOf(W.Player));
+    if (!anchor) return;
+    const icons = ["\uD83D\uDC3E", "\uD83D\uDC97", "\uD83D\uDC95"];
+    const count = 1 + Math.floor(Math.random() * 3);
+    for (let i = 0; i < count; i++) {
+      atmosphereParticles.push({
+        text: icons[Math.floor(Math.random() * icons.length)],
+        x: anchor.x + (Math.random() - 0.5) * 90 * anchor.zoom,
+        y: anchor.y + (Math.random() - 0.5) * 30 * anchor.zoom,
+        vx: (Math.random() - 0.5) * 0.18 * anchor.zoom,
+        vy: -(0.55 + Math.random() * 0.35) * anchor.zoom,
+        size: (22 + Math.random() * 10) * anchor.zoom,
+        born: Date.now(),
+        life: 1400 + Math.random() * 500,
+      });
+    }
+    if (atmosphereParticles.length > 48) {
+      atmosphereParticles.splice(0, atmosphereParticles.length - 48);
+    }
+  }
+
+  function drawAtmosphereParticles() {
+    if (!atmosphereParticles.length) return;
+    const canvas = W.MainCanvas;
+    if (!canvas || typeof canvas.save !== "function") return;
+    const now = Date.now();
+    for (let i = atmosphereParticles.length - 1; i >= 0; i--) {
+      const particle = atmosphereParticles[i];
+      const age = now - particle.born;
+      if (age >= particle.life) {
+        atmosphereParticles.splice(i, 1);
+        continue;
+      }
+      const progress = age / particle.life;
+      canvas.save();
+      canvas.globalAlpha = Math.max(0, 1 - progress);
+      canvas.font = `${Math.round(particle.size)}px "Segoe UI Emoji", "Noto Color Emoji", "Apple Color Emoji", sans-serif`;
+      canvas.textAlign = "center";
+      canvas.textBaseline = "middle";
+      canvas.shadowColor = "rgba(255, 201, 40, 0.35)";
+      canvas.shadowBlur = 6;
+      canvas.fillText(particle.text, particle.x + particle.vx * age, particle.y + particle.vy * age);
+      canvas.restore();
+    }
+  }
+
+  function drawNekoBadgeTooltip() {
+    cleanupNekoPeers();
+    if (W.CurrentScreen !== "ChatRoom" || typeof W.MouseIn !== "function") return;
+    for (const [memberNumber, hitbox] of badgeHitboxes) {
+      if (!W.MouseIn(hitbox.x, hitbox.y, hitbox.w, hitbox.h)) continue;
+      const peer = nekoPeers.get(memberNumber);
+      const isSelf = memberNumber === memberNumberOf(W.Player);
+      const version = isSelf ? VERSION : peer?.version || "unknown";
+      const label = isSelf ? `猫娘插件 v${version}` : `猫娘同好 v${version}`;
+      const width = Math.max(190, label.length * 18);
+      const x = Math.max(10, Math.min(2000 - width - 10, hitbox.cx - width / 2));
+      const y = Math.max(10, hitbox.cy + hitbox.h + 8);
+      if (typeof W.DrawRect === "function") {
+        W.DrawRect(x, y, width, 44, "#fff8dc");
+      }
+      if (typeof W.DrawTextFit === "function") {
+        W.DrawTextFit(label, x + width / 2, y + 22, width - 16, "#7a5600", "#fff8dc");
+      }
+      break;
+    }
   }
 
   function decorateExistingChat() {
@@ -2234,7 +2455,8 @@
     const patchTimer = setInterval(() => {
       const chatReady = patchBC();
       const badgeReady = patchStatusBadge();
-      if (chatReady && badgeReady) clearInterval(patchTimer);
+      const roomReady = patchRoomEffects();
+      if (chatReady && badgeReady && roomReady) clearInterval(patchTimer);
       registerSettingsUI();
       decorateExistingChat();
       syncScreenClass();
@@ -2242,6 +2464,7 @@
 
     setInterval(() => {
       patchStatusBadge();
+      patchRoomEffects();
       registerSettingsUI();
       decorateExistingChat();
       syncScreenClass();
