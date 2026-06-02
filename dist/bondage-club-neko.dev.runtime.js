@@ -689,42 +689,62 @@
     return W.ChatRoomCharacter?.find?.((character) => memberNumberOf(character) === value) || null;
   }
 
-  function matchRelationshipMember(entry, playerNumber) {
-    return memberNumberOf(entry) === playerNumber
-      || memberNumberOf(entry?.MemberNumber) === playerNumber
-      || memberNumberOf(entry?.Lover) === playerNumber
-      || memberNumberOf(entry?.LoverMemberNumber) === playerNumber
-      || memberNumberOf(entry?.MemberNumber1) === playerNumber
-      || memberNumberOf(entry?.MemberNumber2) === playerNumber;
+  function collectRelationshipNumbers(target, value, keys, depth = 0) {
+    if (!target || value == null || depth > 3) return;
+    const direct = memberNumberOf(value);
+    if (direct) {
+      target.add(direct);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const entry of value) collectRelationshipNumbers(target, entry, keys, depth + 1);
+      return;
+    }
+    if (typeof value !== "object") return;
+    for (const key of keys) {
+      if (key in value) collectRelationshipNumbers(target, value[key], keys, depth + 1);
+    }
   }
 
-  function isOwnedByPlayer(character) {
-    const playerNumber = memberNumberOf(W.Player);
-    if (!playerNumber || !character) return false;
-    return memberNumberOf(character.Owner) === playerNumber
-      || memberNumberOf(character.OwnerNumber) === playerNumber
-      || memberNumberOf(character.Ownership?.MemberNumber) === playerNumber
-      || memberNumberOf(character.Ownership?.OwnerMemberNumber) === playerNumber
-      || memberNumberOf(character.Ownership?.Owner) === playerNumber;
+  function collectOwnerNumbers(source) {
+    const values = new Set();
+    if (!source) return values;
+    collectRelationshipNumbers(values, source.Owner, ["MemberNumber", "Owner", "OwnerNumber", "OwnerMemberNumber"]);
+    collectRelationshipNumbers(values, source.OwnerNumber, ["MemberNumber", "Owner", "OwnerNumber", "OwnerMemberNumber"]);
+    collectRelationshipNumbers(values, source.Ownership, ["MemberNumber", "Owner", "OwnerNumber", "OwnerMemberNumber"]);
+    return values;
   }
 
-  function isLoverOfPlayer(character) {
-    const playerNumber = memberNumberOf(W.Player);
-    if (!playerNumber || !character) return false;
-    const sources = [
-      ...(Array.isArray(character.Lovership) ? character.Lovership : []),
-      ...(Array.isArray(character.Lover) ? character.Lover : []),
-      ...(Array.isArray(character.LoverMemberNumber) ? character.LoverMemberNumber : []),
-      ...(Array.isArray(character.Lovers) ? character.Lovers : []),
-    ];
-    return sources.some((entry) => matchRelationshipMember(entry, playerNumber));
+  function collectLoverNumbers(source) {
+    const values = new Set();
+    if (!source) return values;
+    collectRelationshipNumbers(values, source.Lovership, ["MemberNumber", "Lover", "LoverMemberNumber", "MemberNumber1", "MemberNumber2"]);
+    collectRelationshipNumbers(values, source.Lover, ["MemberNumber", "Lover", "LoverMemberNumber", "MemberNumber1", "MemberNumber2"]);
+    collectRelationshipNumbers(values, source.LoverMemberNumber, ["MemberNumber", "Lover", "LoverMemberNumber", "MemberNumber1", "MemberNumber2"]);
+    collectRelationshipNumbers(values, source.Lovers, ["MemberNumber", "Lover", "LoverMemberNumber", "MemberNumber1", "MemberNumber2"]);
+    return values;
+  }
+
+  function hasOwnerRelationship(character, senderNumber) {
+    const playerOwners = collectOwnerNumbers(W.Player);
+    if (playerOwners.has(senderNumber)) return true;
+    const characterOwners = collectOwnerNumbers(character);
+    return characterOwners.has(memberNumberOf(W.Player));
+  }
+
+  function hasLoverRelationship(character, senderNumber) {
+    const playerLovers = collectLoverNumbers(W.Player);
+    if (playerLovers.has(senderNumber)) return true;
+    const characterLovers = collectLoverNumbers(character);
+    return characterLovers.has(memberNumberOf(W.Player));
   }
 
   function getRelationshipStatus(sender) {
     const character = getCharacterByMemberNumber(sender);
-    if (!character || memberNumberOf(character) === memberNumberOf(W.Player)) return null;
-    const owner = isOwnedByPlayer(character);
-    const lover = isLoverOfPlayer(character);
+    const senderNumber = memberNumberOf(sender);
+    if (!character || !senderNumber || senderNumber === memberNumberOf(W.Player)) return null;
+    const owner = hasOwnerRelationship(character, senderNumber);
+    const lover = hasLoverRelationship(character, senderNumber);
     if (owner && lover) return "dual";
     if (owner) return "owner";
     if (lover) return "lover";
@@ -733,13 +753,33 @@
 
   function applyRelationshipBadge(div, relation) {
     const nameEl = div?.querySelector?.(".ChatMessageName");
-    if (!nameEl || nameEl.dataset.bcnRelationBadge === "1") return;
-    const icon = document.createElement("span");
+    if (!nameEl) return;
+    const existing = nameEl.querySelector(".bcn-relation-badge");
+    if (!relation) {
+      existing?.remove();
+      delete nameEl.dataset.bcnRelationBadge;
+      return;
+    }
+    const icon = existing || document.createElement("span");
     icon.className = `bcn-relation-badge bcn-relation-badge-${relation}`;
     icon.textContent = relation === "owner" ? "🐾" : relation === "lover" ? "❤" : "❤🐾";
     icon.setAttribute("aria-hidden", "true");
-    nameEl.prepend(icon);
-    nameEl.dataset.bcnRelationBadge = "1";
+    if (!existing) nameEl.prepend(icon);
+    nameEl.dataset.bcnRelationBadge = relation;
+  }
+
+  function syncRelationshipDecoration(div, sender) {
+    if (!div) return;
+    div.classList.remove("bcn-related-message", "bcn-related-owner", "bcn-related-lover", "bcn-related-dual");
+    delete div.dataset.bcnRelation;
+    const relation = getRelationshipStatus(sender);
+    if (!relation) {
+      applyRelationshipBadge(div, null);
+      return;
+    }
+    div.classList.add("bcn-related-message", `bcn-related-${relation}`);
+    div.dataset.bcnRelation = relation;
+    applyRelationshipBadge(div, relation);
   }
 
   function isBugPeerSender(sender) {
@@ -750,27 +790,21 @@
   }
 
   function decorateMessage(div, data) {
-    if (!div || processedMessages.has(div)) return div;
-    processedMessages.add(div);
+    if (!div) return div;
+    if (!processedMessages.has(div)) {
+      processedMessages.add(div);
+      const type = data?.Type || [...div.classList].find((name) => name.startsWith("ChatMessage"))?.replace("ChatMessage", "");
+      div.dataset.bcnType = type || "Unknown";
 
-    const type = data?.Type || [...div.classList].find((name) => name.startsWith("ChatMessage"))?.replace("ChatMessage", "");
-    div.dataset.bcnType = type || "Unknown";
+      if (isOwnSender(data?.Sender || div.dataset.sender)) {
+        div.classList.add("bcn-own-message");
+      }
 
-    if (isOwnSender(data?.Sender || div.dataset.sender)) {
-      div.classList.add("bcn-own-message");
+      if (config.decorateChat) {
+        div.classList.add("bcn-card-message");
+      }
     }
-
-    const relation = getRelationshipStatus(data?.Sender || div.dataset.sender);
-    if (relation) {
-      div.classList.add("bcn-related-message", `bcn-related-${relation}`);
-      div.dataset.bcnRelation = relation;
-      applyRelationshipBadge(div, relation);
-    }
-
-    if (config.decorateChat) {
-      div.classList.add("bcn-card-message");
-    }
-
+    syncRelationshipDecoration(div, data?.Sender || div.dataset.sender);
     return div;
   }
 
