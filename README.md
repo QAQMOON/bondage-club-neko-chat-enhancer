@@ -47,7 +47,7 @@ https://github.com/QAQMOON/meow-/raw/main/bondage-club-neko-dev.user.js
 Bug 版：
 https://github.com/QAQMOON/meow-/raw/main/bondage-club-neko-bug.user.js
 
-Bug 版只建议用油猴安装，用来测试 RP 语气包等实验功能；不加入 FUSAM。进入聊天室后可用 `/neko rp 开`、`/neko rp 古风` 等命令切换 RP 人设。
+Bug 版只建议用油猴安装，用来测试 RP 语气包等实验功能；不加入 FUSAM。
 
 ## 更新
 

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bondage Club Bug猫娘聊天室增强
 // @namespace    https://penyo.ru/
-// @version      2.10.6-bug.2
+// @version      2.10.6-bug.3
 // @description  Bondage Club Bug猫娘 RP 语气包测试版
 // @author       Penyo (Modified)
 // @match        *://www.bondageprojects.com/club_game*
@@ -35,7 +35,7 @@
   const W = typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
   const MOD_ID = "BCNekoEnhancer";
   const CHANNEL = "bug";
-  const VERSION = "2.10.6-bug.2";
+  const VERSION = "2.10.6-bug.3";
   const STORE_KEY = "bcNekoEnhancer.config.v2.bug";
   const BUG_RP_STORE_KEY = "bcNekoEnhancer.bug.rp.v1";
   const MOD_SDK_URL = "https://cdn.jsdelivr.net/npm/bondage-club-mod-sdk@1.2.0/dist/bcmodsdk.js";
@@ -43,6 +43,8 @@
   const ACTION_LIBRARY_CACHE_KEY = "bcNekoEnhancer.actionLibrary.v1";
   const KAOMOJI_LIBRARY_URL = "https://raw.githubusercontent.com/QAQMOON/meow-/main/kaomoji/cute-kaomoji.json";
   const KAOMOJI_LIBRARY_CACHE_KEY = "bcNekoEnhancer.kaomojiLibrary.v1";
+  const RP_LIBRARY_URL = "https://raw.githubusercontent.com/QAQMOON/meow-/main/rp/catgirl-rp-presets.json";
+  const RP_LIBRARY_CACHE_KEY = "bcNekoEnhancer.rpLibrary.v1";
   const PEER_SIGNAL_CONTENT = "BCNekoEnhancer.Hello";
   const PEER_SIGNAL_INTERVAL = 45000;
   const PEER_TTL = 300000;
@@ -228,7 +230,14 @@
     ],
   };
 
+  const DEFAULT_RP_LIBRARY = {
+    version: "builtin",
+    updatedAt: "",
+    tonePresets: RP_TONE_PRESETS,
+  };
+
   const config = loadConfig();
+  let rpLibrary = loadCachedRpLibrary() || normalizeRpLibrary(DEFAULT_RP_LIBRARY);
   let bugRp = loadBugRpConfig();
   let actionLibrary = loadCachedActionLibrary() || normalizeActionLibrary(DEFAULT_ACTION_LIBRARY);
   let kaomojiLibrary = loadCachedKaomojiLibrary() || normalizeKaomojiLibrary(DEFAULT_KAOMOJI_LIBRARY);
@@ -241,6 +250,7 @@
   let sdkLoadingPromise = null;
   let settingsRegistered = false;
   let nekoCommandsRegistered = false;
+  let nekoCommandRegistrationSource = "";
   let toastTimer = 0;
   let suppressNextEmoteConvertAt = 0;
   let activeKaomojiGroup = "all";
@@ -265,9 +275,10 @@
     sendAction: sendQuickAction,
     reloadActions: loadRemoteActionLibrary,
     reloadKaomoji: loadRemoteKaomojiLibrary,
+    reloadRp: loadRemoteRpLibrary,
     bugRp: () => ({ ...bugRp, label: currentTone().label }),
     diagnostic,
-    status: () => ({ patched, sdk: !!bcModApi, enabled: config.enabled, channel: CHANNEL, rp: { ...bugRp, label: currentTone().label }, screen: W.CurrentScreen, url: location.href }),
+    status: () => ({ patched, sdk: !!bcModApi, enabled: config.enabled, channel: CHANNEL, rp: { ...bugRp, label: currentTone().label }, commandRegistered: nekoCommandsRegistered, commandRegistrationSource: nekoCommandRegistrationSource, screen: W.CurrentScreen, url: location.href }),
   };
 
   function diagnostic() {
@@ -277,9 +288,11 @@
     const activeKaomojiItems = getActiveKaomojiItems();
     let actionCache = false;
     let kaomojiCache = false;
+    let rpCache = false;
     try {
       actionCache = !!localStorage.getItem(ACTION_LIBRARY_CACHE_KEY);
       kaomojiCache = !!localStorage.getItem(KAOMOJI_LIBRARY_CACHE_KEY);
+      rpCache = !!localStorage.getItem(RP_LIBRARY_CACHE_KEY);
     } catch {
       // Storage may be unavailable in some browser modes.
     }
@@ -299,6 +312,7 @@
         sdkRegistered: !!bcModApi,
         chatHooks: patched,
         commandRegistered: nekoCommandsRegistered,
+        commandRegistrationSource: nekoCommandRegistrationSource,
         statusBadgeHook: statusBadgePatched,
         roomEffectsHook: roomEffectsPatched,
         settingsRegistered,
@@ -330,6 +344,12 @@
           items: activeKaomojiItems.length,
           cached: kaomojiCache,
           url: KAOMOJI_LIBRARY_URL,
+        },
+        rp: {
+          version: rpLibrary.version || "unknown",
+          presets: Object.keys(rpLibrary.tonePresets || {}).length,
+          cached: rpCache,
+          url: RP_LIBRARY_URL,
         },
       },
       peers: {
@@ -393,7 +413,8 @@
   }
 
   function normalizeBugRpConfig(next) {
-    const tonePreset = RP_TONE_PRESETS[next?.tonePreset] ? next.tonePreset : "soft";
+    const tonePresets = rpLibrary?.tonePresets || RP_TONE_PRESETS;
+    const tonePreset = tonePresets[next?.tonePreset] ? next.tonePreset : "soft";
     return {
       enabled: next?.enabled === true,
       tonePreset,
@@ -406,7 +427,8 @@
   }
 
   function currentTone() {
-    return RP_TONE_PRESETS[bugRp.tonePreset] || RP_TONE_PRESETS.soft;
+    const tonePresets = rpLibrary?.tonePresets || RP_TONE_PRESETS;
+    return tonePresets[bugRp.tonePreset] || tonePresets.soft || RP_TONE_PRESETS.soft;
   }
 
   function bugRpStatusText() {
@@ -450,7 +472,7 @@
       showToast(bugRpStatusText());
       return true;
     }
-    if (RP_TONE_PRESETS[action]) {
+    if ((rpLibrary?.tonePresets || RP_TONE_PRESETS)[action]) {
       bugRp.enabled = true;
       bugRp.tonePreset = action;
       config.enabled = true;
@@ -484,41 +506,91 @@
     return true;
   }
 
+  function getNekoCommandDefinitions() {
+    const createAction = (prefix) => (argumentsString = "", message = "", args = []) => {
+      const argv = Array.isArray(args) ? args : String(argumentsString || "").trim().split(/\s+/).filter(Boolean);
+      runNekoCommand(`/${prefix} ${argv.join(" ")}`.trim());
+    };
+    return [
+      {
+        Tag: "neko",
+        Description: "Bondage Club Neko Chat Enhancer commands.",
+        Action: createAction("neko"),
+      },
+      {
+        Tag: "bug",
+        Description: "Alias for Bondage Club Neko Chat Enhancer bug commands.",
+        Action: createAction("bug"),
+      },
+      {
+        Tag: "noke",
+        Description: "Typo alias for Bondage Club Neko Chat Enhancer commands.",
+        Action: createAction("noke"),
+      },
+    ];
+  }
+
+  function markNekoCommandsRegistered(source) {
+    nekoCommandsRegistered = true;
+    nekoCommandRegistrationSource = source;
+    console.log(`[BC 猫娘增强] /neko 命令已注册喵~ (${source})`);
+    return true;
+  }
+
+  function tryRegisterCommandsWithHost(host, hostName, commands) {
+    if (!host || typeof host !== "object") return false;
+    if (typeof host.registerCommand === "function") {
+      for (const command of commands) host.registerCommand(command);
+      return markNekoCommandsRegistered(`${hostName}.registerCommand`);
+    }
+    if (typeof host.addCommand === "function") {
+      for (const command of commands) host.addCommand(command);
+      return markNekoCommandsRegistered(`${hostName}.addCommand`);
+    }
+    if (typeof host.registerCommands === "function") {
+      host.registerCommands(commands);
+      return markNekoCommandsRegistered(`${hostName}.registerCommands`);
+    }
+    if (typeof host.addCommands === "function") {
+      host.addCommands(commands);
+      return markNekoCommandsRegistered(`${hostName}.addCommands`);
+    }
+    return false;
+  }
+
+  function tryRegisterExternalNekoCommands(commands) {
+    const hosts = [
+      ["BCX", W.BCX],
+      ["BCX.commands", W.BCX?.commands],
+      ["BCX.Command", W.BCX?.Command],
+      ["bcx", W.bcx],
+      ["bcx.commands", W.bcx?.commands],
+      ["bcx.Command", W.bcx?.Command],
+      ["EBCH", W.EBCH],
+      ["EBCH.commands", W.EBCH?.commands],
+      ["EBCH.Command", W.EBCH?.Command],
+      ["ebch", W.ebch],
+      ["ebch.commands", W.ebch?.commands],
+      ["ebch.Command", W.ebch?.Command],
+    ];
+    for (const [hostName, host] of hosts) {
+      try {
+        if (tryRegisterCommandsWithHost(host, hostName, commands)) return true;
+      } catch (error) {
+        console.warn(`[BC 猫娘增强] ${hostName} 命令注册失败，继续尝试其它入口:`, error);
+      }
+    }
+    return false;
+  }
+
   function registerNekoCommands() {
     if (nekoCommandsRegistered) return true;
-    if (typeof W.CommandCombine !== "function") return false;
-    const action = (argumentsString = "", message = "", args = []) => {
-      const argv = Array.isArray(args) ? args : String(argumentsString || "").trim().split(/\s+/).filter(Boolean);
-      const text = `/neko ${argv.join(" ")}`.trim();
-      runNekoCommand(text);
-    };
+    const commands = getNekoCommandDefinitions();
     try {
-      W.CommandCombine([
-        {
-          Tag: "neko",
-          Description: "Bondage Club Neko Chat Enhancer commands.",
-          Action: action,
-        },
-        {
-          Tag: "bug",
-          Description: "Alias for Bondage Club Neko Chat Enhancer bug commands.",
-          Action: (argumentsString = "", message = "", args = []) => {
-            const argv = Array.isArray(args) ? args : String(argumentsString || "").trim().split(/\s+/).filter(Boolean);
-            runNekoCommand(`/bug ${argv.join(" ")}`.trim());
-          },
-        },
-        {
-          Tag: "noke",
-          Description: "Typo alias for Bondage Club Neko Chat Enhancer commands.",
-          Action: (argumentsString = "", message = "", args = []) => {
-            const argv = Array.isArray(args) ? args : String(argumentsString || "").trim().split(/\s+/).filter(Boolean);
-            runNekoCommand(`/noke ${argv.join(" ")}`.trim());
-          },
-        },
-      ]);
-      nekoCommandsRegistered = true;
-      console.log("[BC 猫娘增强] /neko 命令已注册喵~");
-      return true;
+      if (tryRegisterExternalNekoCommands(commands)) return true;
+      if (typeof W.CommandCombine !== "function") return false;
+      W.CommandCombine(commands);
+      return markNekoCommandsRegistered("CommandCombine");
     } catch (error) {
       console.warn("[BC 猫娘增强] /neko 命令注册失败，保留输入拦截兜底:", error);
       return false;
@@ -708,6 +780,147 @@
       });
   }
 
+  function normalizeStringArray(value) {
+    return Array.isArray(value) ? value.map((item) => String(item || "").trim()).filter(Boolean) : [];
+  }
+
+  function normalizeRpPrefixArray(value) {
+    return Array.isArray(value) ? value.map((item) => String(item || "").trim()) : [];
+  }
+
+  function normalizeRpReplacements(value) {
+    if (!Array.isArray(value)) return [];
+    return value
+      .map((item) => {
+        if (Array.isArray(item)) return [String(item[0] || ""), String(item[1] || "")];
+        if (item && typeof item === "object") return [String(item.from || ""), String(item.to || "")];
+        return null;
+      })
+      .filter((item) => item && item[0]);
+  }
+
+  function normalizeRpActionPack(value) {
+    const actions = {};
+    for (const kind of ["hug", "pat", "feed", "cuddle", "kiss", "default"]) {
+      const pack = value?.[kind];
+      const target = normalizeStringArray(pack?.target);
+      const self = normalizeStringArray(pack?.self);
+      if (target.length || self.length) actions[kind] = { target, self };
+    }
+    return actions;
+  }
+
+  function normalizeRpTone(id, source = {}, fallback = {}) {
+    const chat = source.chat || {};
+    const fallbackChat = fallback.chat || {};
+    const suffixes = normalizeStringArray(chat.suffixes).length
+      ? normalizeStringArray(chat.suffixes)
+      : normalizeStringArray(fallbackChat.suffixes || fallback.suffix);
+    return {
+      ...fallback,
+      id,
+      label: String(source.label || fallback.label || id),
+      enabled: source.enabled !== false,
+      suffix: String(source.suffix || fallback.suffix || suffixes[0] || "喵"),
+      actionTarget: source.actionTarget || fallback.actionTarget,
+      actionSelf: source.actionSelf || fallback.actionSelf,
+      chat: {
+        replacements: normalizeRpReplacements(chat.replacements).length
+          ? normalizeRpReplacements(chat.replacements)
+          : normalizeRpReplacements(fallbackChat.replacements),
+        prefixes: normalizeRpPrefixArray(chat.prefixes).length
+          ? normalizeRpPrefixArray(chat.prefixes)
+          : normalizeRpPrefixArray(fallbackChat.prefixes),
+        suffixes,
+        endingChance: Number.isFinite(Number(chat.endingChance))
+          ? clamp(Number(chat.endingChance), 0, 1)
+          : Number.isFinite(Number(fallbackChat.endingChance))
+            ? clamp(Number(fallbackChat.endingChance), 0, 1)
+            : null,
+        kaomojiChance: Number.isFinite(Number(chat.kaomojiChance))
+          ? clamp(Number(chat.kaomojiChance), 0, 1)
+          : Number.isFinite(Number(fallbackChat.kaomojiChance))
+            ? clamp(Number(fallbackChat.kaomojiChance), 0, 1)
+            : null,
+      },
+      whisper: {
+        prefix: String(source.whisper?.prefix || fallback.whisper?.prefix || ""),
+        endingChance: Number.isFinite(Number(source.whisper?.endingChance))
+          ? clamp(Number(source.whisper.endingChance), 0, 1)
+          : Number.isFinite(Number(fallback.whisper?.endingChance))
+            ? clamp(Number(fallback.whisper.endingChance), 0, 1)
+            : null,
+      },
+      actions: {
+        ...normalizeRpActionPack(fallback.actions),
+        ...normalizeRpActionPack(source.actions),
+      },
+    };
+  }
+
+  function normalizeRpLibrary(source) {
+    const raw = source?.tonePresets || {};
+    const entries = Array.isArray(raw)
+      ? raw.map((tone, index) => [tone?.id || `tone-${index}`, tone])
+      : Object.entries(raw);
+    const tonePresets = {};
+
+    for (const [id, tone] of Object.entries(RP_TONE_PRESETS)) {
+      tonePresets[id] = normalizeRpTone(id, tone, {});
+    }
+
+    for (const [rawId, tone] of entries) {
+      const id = String(rawId === "brief" ? "simple" : rawId || "").trim();
+      if (!id || !tone || typeof tone !== "object") continue;
+      tonePresets[id] = normalizeRpTone(id, tone, tonePresets[id] || {});
+    }
+
+    if (!tonePresets.simple && tonePresets.brief) {
+      tonePresets.simple = normalizeRpTone("simple", tonePresets.brief, RP_TONE_PRESETS.simple);
+      delete tonePresets.brief;
+    }
+
+    return {
+      version: String(source?.version || "unknown"),
+      updatedAt: source?.updatedAt || "",
+      tonePresets,
+    };
+  }
+
+  function loadCachedRpLibrary() {
+    try {
+      const raw = localStorage.getItem(RP_LIBRARY_CACHE_KEY);
+      return raw ? normalizeRpLibrary(JSON.parse(raw)) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function cacheRpLibrary(library) {
+    try {
+      localStorage.setItem(RP_LIBRARY_CACHE_KEY, JSON.stringify(library));
+    } catch {
+      // Ignore storage failures; the builtin RP library still works.
+    }
+  }
+
+  function loadRemoteRpLibrary() {
+    return requestText(RP_LIBRARY_URL)
+      .then((text) => {
+        const library = normalizeRpLibrary(JSON.parse(text));
+        rpLibrary = library;
+        cacheRpLibrary(library);
+        bugRp = normalizeBugRpConfig(bugRp);
+        saveBugRpConfig();
+        console.log(`[BC 猫娘增强] Bug RP 语气库已加载: ${library.version}, ${Object.keys(library.tonePresets || {}).length} 套人设`);
+        return library;
+      })
+      .catch((error) => {
+        console.warn("[BC 猫娘增强] 远程 Bug RP 语气库加载失败，使用缓存/内置库:", error);
+        return rpLibrary;
+      });
+  }
+
   function requestText(url) {
     if (typeof GM_xmlhttpRequest === "function") {
       return new Promise((resolve, reject) => {
@@ -863,6 +1076,35 @@
     return `${value}${suffix}`;
   }
 
+  function applyRpChatRules(text, tone) {
+    const chat = tone?.chat || {};
+    let value = relationHonorific(String(text || ""));
+    for (const [from, to] of chat.replacements || []) {
+      if (!from) continue;
+      value = value.split(from).join(to);
+    }
+    const prefixes = Array.isArray(chat.prefixes) ? chat.prefixes : [];
+    if (prefixes.length) {
+      const prefix = prefixes[Math.floor(Math.random() * prefixes.length)] || "";
+      if (prefix && !value.startsWith(prefix)) value = `${prefix}${value}`;
+    }
+    return value;
+  }
+
+  function hasRemoteRpChatRules(tone) {
+    const chat = tone?.chat || {};
+    return Array.isArray(chat.replacements) && chat.replacements.length;
+  }
+
+  function fallbackRpNeko(text, preset) {
+    if (preset === "soft") return softNeko(text);
+    if (preset === "classic") return classicNeko(text);
+    if (preset === "tsundere") return tsundereNeko(text);
+    if (preset === "polite") return politeNeko(text);
+    if (preset === "simple") return simpleNeko(text);
+    return standardNeko(text);
+  }
+
   function softNeko(text) {
     return relationHonorific(text)
       .replace(/我们/g, "咱喵们")
@@ -935,27 +1177,33 @@
     if (isBugCommandText(text)) return text;
     const preset = bugRp.tonePreset;
     const tone = currentTone();
-    let value = text;
-    if (preset === "soft") value = softNeko(value);
-    else if (preset === "classic") value = classicNeko(value);
-    else if (preset === "tsundere") value = tsundereNeko(value);
-    else if (preset === "polite") value = politeNeko(value);
-    else if (preset === "simple") value = simpleNeko(value);
-    else value = standardNeko(value);
+    const chat = tone.chat || {};
+    const remoteRules = hasRemoteRpChatRules(tone);
+    let value = remoteRules ? applyRpChatRules(text, tone) : fallbackRpNeko(text, preset);
+    const suffix = pickRandomLine(chat.suffixes, preset === "classic" ? "喵乎" : tone.suffix);
+    const chatChance = Number.isFinite(Number(chat.endingChance))
+      ? Number(chat.endingChance)
+      : preset === "simple" ? 0.28 : preset === "polite" ? 0.5 : 0.8;
 
     if (type === "Whisper") {
-      value = maybeAddToneSuffix(value, preset === "classic" ? "喵乎" : tone.suffix, preset === "simple" ? 0.35 : 0.85);
-      return value.startsWith("悄悄喵~") ? value : `悄悄喵~ ${value}`;
+      const whisperPrefix = tone.whisper?.prefix || "悄悄喵~ ";
+      const whisperChance = Number.isFinite(Number(tone.whisper?.endingChance))
+        ? Number(tone.whisper.endingChance)
+        : preset === "simple" ? 0.35 : 0.85;
+      value = maybeAddToneSuffix(value, suffix, whisperChance);
+      return value.startsWith(whisperPrefix.trim()) ? value : `${whisperPrefix}${value}`;
     }
     if (type === "Emote") {
-      value = maybeAddToneSuffix(value, tone.suffix, preset === "simple" ? 0.25 : 0.65);
-      return hasKnownKaomoji(value) || preset === "simple" ? value : `${value} ${pickRandomKaomoji()}`;
+      const emoteChance = Number.isFinite(Number(chat.kaomojiChance))
+        ? Number(chat.kaomojiChance)
+        : preset === "simple" ? 0 : 0.65;
+      value = maybeAddToneSuffix(value, suffix, preset === "simple" ? 0.25 : 0.65);
+      return hasKnownKaomoji(value) || Math.random() > emoteChance ? value : `${value} ${pickRandomKaomoji()}`;
     }
     if (type === "Action" || type === "Activity") {
       return rpActionLine(value);
     }
-    const chance = preset === "simple" ? 0.28 : preset === "polite" ? 0.5 : 0.8;
-    return maybeAddToneSuffix(value, tone.suffix, chance);
+    return maybeAddToneSuffix(value, suffix, chatChance);
   }
 
   function rpActionLine(text) {
@@ -1564,6 +1812,13 @@
     const preset = bugRp.tonePreset;
     const kind = actionKind(action);
     const targeted = !!target;
+    const remoteAction = currentTone().actions?.[kind] || currentTone().actions?.default;
+    if (remoteAction) {
+      const remoteLine = targeted
+        ? pickRandomLine(remoteAction.target, pickRandomLine(remoteAction.self, ""))
+        : pickRandomLine(remoteAction.self, pickRandomLine(remoteAction.target, ""));
+      if (remoteLine) return /\{actor\}/.test(remoteLine) ? remoteLine : `{actor}${remoteLine}`;
+    }
     const templates = {
       soft: {
         hug: ["{actor}软乎乎地抱住{target}蹭了蹭，尾巴开心地晃呀晃喵~", "{actor}抱住自己缩成暖暖一团，小声呼噜呼噜喵~"],
@@ -3035,6 +3290,7 @@
     registerModSdk();
     loadRemoteActionLibrary();
     loadRemoteKaomojiLibrary();
+    loadRemoteRpLibrary();
     installObserver();
     syncScreenClass();
 
