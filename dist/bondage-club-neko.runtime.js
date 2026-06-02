@@ -682,6 +682,106 @@
     return Number(sender) === Number(W.Player?.MemberNumber);
   }
 
+  function getCharacterByMemberNumber(memberNumber) {
+    const value = memberNumberOf(memberNumber);
+    if (!value) return null;
+    if (memberNumberOf(W.Player) === value) return W.Player || null;
+    return W.ChatRoomCharacter?.find?.((character) => memberNumberOf(character) === value) || null;
+  }
+
+  function collectRelationshipNumbers(target, value, keys, depth = 0) {
+    if (!target || value == null || depth > 3) return;
+    const direct = memberNumberOf(value);
+    if (direct) {
+      target.add(direct);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const entry of value) collectRelationshipNumbers(target, entry, keys, depth + 1);
+      return;
+    }
+    if (typeof value !== "object") return;
+    for (const key of keys) {
+      if (key in value) collectRelationshipNumbers(target, value[key], keys, depth + 1);
+    }
+  }
+
+  function collectOwnerNumbers(source) {
+    const values = new Set();
+    if (!source) return values;
+    collectRelationshipNumbers(values, source.Owner, ["MemberNumber", "Owner", "OwnerNumber", "OwnerMemberNumber"]);
+    collectRelationshipNumbers(values, source.OwnerNumber, ["MemberNumber", "Owner", "OwnerNumber", "OwnerMemberNumber"]);
+    collectRelationshipNumbers(values, source.Ownership, ["MemberNumber", "Owner", "OwnerNumber", "OwnerMemberNumber"]);
+    return values;
+  }
+
+  function collectLoverNumbers(source) {
+    const values = new Set();
+    if (!source) return values;
+    collectRelationshipNumbers(values, source.Lovership, ["MemberNumber", "Lover", "LoverMemberNumber", "MemberNumber1", "MemberNumber2"]);
+    collectRelationshipNumbers(values, source.Lover, ["MemberNumber", "Lover", "LoverMemberNumber", "MemberNumber1", "MemberNumber2"]);
+    collectRelationshipNumbers(values, source.LoverMemberNumber, ["MemberNumber", "Lover", "LoverMemberNumber", "MemberNumber1", "MemberNumber2"]);
+    collectRelationshipNumbers(values, source.Lovers, ["MemberNumber", "Lover", "LoverMemberNumber", "MemberNumber1", "MemberNumber2"]);
+    return values;
+  }
+
+  function hasOwnerRelationship(character, senderNumber) {
+    const playerOwners = collectOwnerNumbers(W.Player);
+    if (playerOwners.has(senderNumber)) return true;
+    const characterOwners = collectOwnerNumbers(character);
+    return characterOwners.has(memberNumberOf(W.Player));
+  }
+
+  function hasLoverRelationship(character, senderNumber) {
+    const playerLovers = collectLoverNumbers(W.Player);
+    if (playerLovers.has(senderNumber)) return true;
+    const characterLovers = collectLoverNumbers(character);
+    return characterLovers.has(memberNumberOf(W.Player));
+  }
+
+  function getRelationshipStatus(sender) {
+    const character = getCharacterByMemberNumber(sender);
+    const senderNumber = memberNumberOf(sender);
+    if (!character || !senderNumber || senderNumber === memberNumberOf(W.Player)) return null;
+    const owner = hasOwnerRelationship(character, senderNumber);
+    const lover = hasLoverRelationship(character, senderNumber);
+    if (owner && lover) return "dual";
+    if (owner) return "owner";
+    if (lover) return "lover";
+    return null;
+  }
+
+  function applyRelationshipBadge(div, relation) {
+    const nameEl = div?.querySelector?.(".ChatMessageName");
+    if (!nameEl) return;
+    const existing = nameEl.querySelector(".bcn-relation-badge");
+    if (!relation) {
+      existing?.remove();
+      delete nameEl.dataset.bcnRelationBadge;
+      return;
+    }
+    const icon = existing || document.createElement("span");
+    icon.className = `bcn-relation-badge bcn-relation-badge-${relation}`;
+    icon.textContent = relation === "owner" ? "🐾" : relation === "lover" ? "❤" : "❤🐾";
+    icon.setAttribute("aria-hidden", "true");
+    if (!existing) nameEl.prepend(icon);
+    nameEl.dataset.bcnRelationBadge = relation;
+  }
+
+  function syncRelationshipDecoration(div, sender) {
+    if (!div) return;
+    div.classList.remove("bcn-related-message", "bcn-related-owner", "bcn-related-lover", "bcn-related-dual");
+    delete div.dataset.bcnRelation;
+    const relation = getRelationshipStatus(sender);
+    if (!relation) {
+      applyRelationshipBadge(div, null);
+      return;
+    }
+    div.classList.add("bcn-related-message", `bcn-related-${relation}`);
+    div.dataset.bcnRelation = relation;
+    applyRelationshipBadge(div, relation);
+  }
+
   function isBugPeerSender(sender) {
     const memberNumber = memberNumberOf(sender);
     if (!memberNumber) return false;
@@ -690,20 +790,21 @@
   }
 
   function decorateMessage(div, data) {
-    if (!div || processedMessages.has(div)) return div;
-    processedMessages.add(div);
+    if (!div) return div;
+    if (!processedMessages.has(div)) {
+      processedMessages.add(div);
+      const type = data?.Type || [...div.classList].find((name) => name.startsWith("ChatMessage"))?.replace("ChatMessage", "");
+      div.dataset.bcnType = type || "Unknown";
 
-    const type = data?.Type || [...div.classList].find((name) => name.startsWith("ChatMessage"))?.replace("ChatMessage", "");
-    div.dataset.bcnType = type || "Unknown";
+      if (isOwnSender(data?.Sender || div.dataset.sender)) {
+        div.classList.add("bcn-own-message");
+      }
 
-    if (isOwnSender(data?.Sender || div.dataset.sender)) {
-      div.classList.add("bcn-own-message");
+      if (config.decorateChat) {
+        div.classList.add("bcn-card-message");
+      }
     }
-
-    if (config.decorateChat) {
-      div.classList.add("bcn-card-message");
-    }
-
+    syncRelationshipDecoration(div, data?.Sender || div.dataset.sender);
     return div;
   }
 
@@ -2405,15 +2506,80 @@
       #TextAreaChatLog .ChatMessageEmote,
       #TextAreaChatLog .ChatMessageAction,
       #TextAreaChatLog .ChatMessageActivity {
-        border-color: var(--bcn-border) !important;
+        margin: 4px 8px !important;
+        padding: 2px 42px 2px 10px !important;
+        border: none !important;
+        border-radius: 0 !important;
+        background: transparent !important;
+        box-shadow: none !important;
         color: var(--bcn-muted) !important;
         font-style: normal !important;
+        font-size: 0.94em !important;
+      }
+
+      #TextAreaChatLog .ChatMessageEmote::after,
+      #TextAreaChatLog .ChatMessageAction::after,
+      #TextAreaChatLog .ChatMessageActivity::after {
+        content: none !important;
+      }
+
+      #TextAreaChatLog .ChatMessageEmote .ChatMessageName,
+      #TextAreaChatLog .ChatMessageAction .ChatMessageName,
+      #TextAreaChatLog .ChatMessageActivity .ChatMessageName {
+        color: var(--bcn-muted) !important;
       }
 
       #TextAreaChatLog .ChatMessageName {
         color: var(--label-color, var(--bcn-text)) !important;
         text-shadow: 0 1px 0 #fff !important;
         font-weight: 800;
+      }
+
+      #TextAreaChatLog .bcn-relation-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 1.15em;
+        margin-right: 0.2em;
+        font-size: 0.92em;
+        vertical-align: baseline;
+      }
+
+      #TextAreaChatLog .bcn-related-owner {
+        border-color: #f2d087 !important;
+        box-shadow: 0 4px 14px rgba(232, 184, 88, 0.16);
+      }
+
+      #TextAreaChatLog .bcn-related-owner .ChatMessageName {
+        color: #af7f22 !important;
+      }
+
+      #TextAreaChatLog .bcn-related-owner .bcn-relation-badge {
+        color: #dfb24c;
+        text-shadow: 0 1px 0 #fff6df, 0 0 8px rgba(240, 191, 92, 0.24);
+      }
+
+      #TextAreaChatLog .bcn-related-lover .ChatMessageName {
+        color: #d06b96 !important;
+      }
+
+      #TextAreaChatLog .bcn-related-lover .bcn-relation-badge {
+        color: #f08db4;
+        text-shadow: 0 1px 0 #fff4f8, 0 0 8px rgba(240, 141, 180, 0.2);
+      }
+
+      #TextAreaChatLog .bcn-related-dual {
+        border-color: #e9be93 !important;
+        box-shadow: 0 4px 16px rgba(232, 166, 120, 0.18);
+      }
+
+      #TextAreaChatLog .bcn-related-dual .ChatMessageName {
+        color: #c68463 !important;
+      }
+
+      #TextAreaChatLog .bcn-related-dual .bcn-relation-badge {
+        color: #d88b8b;
+        text-shadow: 0 1px 0 #fff6f8, 0 0 8px rgba(226, 169, 119, 0.22);
       }
 
       body.bcn-enabled input,
