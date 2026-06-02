@@ -212,8 +212,76 @@
     sendAction: sendQuickAction,
     reloadActions: loadRemoteActionLibrary,
     reloadKaomoji: loadRemoteKaomojiLibrary,
+    diagnostic,
     status: () => ({ patched, sdk: !!bcModApi, enabled: config.enabled, screen: W.CurrentScreen, url: location.href }),
   };
+
+  function diagnostic() {
+    cleanupNekoPeers();
+    const activeActions = (actionLibrary.actions || []).filter((action) => action.enabled !== false);
+    const activeKaomojiGroups = getVisibleKaomojiGroups();
+    const activeKaomojiItems = getActiveKaomojiItems();
+    let actionCache = false;
+    let kaomojiCache = false;
+    try {
+      actionCache = !!localStorage.getItem(ACTION_LIBRARY_CACHE_KEY);
+      kaomojiCache = !!localStorage.getItem(KAOMOJI_LIBRARY_CACHE_KEY);
+    } catch {
+      // Storage may be unavailable in some browser modes.
+    }
+    return {
+      mod: MOD_ID,
+      version: VERSION,
+      url: String(location.href),
+      screen: W.CurrentScreen || "",
+      player: W.Player?.MemberNumber || null,
+      runtime: {
+        sdkRegistered: !!bcModApi,
+        chatHooks: patched,
+        statusBadgeHook: statusBadgePatched,
+        roomEffectsHook: roomEffectsPatched,
+        settingsRegistered,
+      },
+      config: {
+        enabled: !!config.enabled,
+        convertOutgoing: !!config.convertOutgoing,
+        convertDisplayed: !!config.convertDisplayed,
+        decorateChat: !!config.decorateChat,
+        rainOnSend: !!config.rainOnSend,
+        quickWheel: !!config.quickWheel,
+        notifyIncoming: !!config.notifyIncoming,
+        theme: config.theme,
+        actionTargetMode: config.actionTargetMode,
+        nyanChance: config.nyanChance,
+      },
+      libraries: {
+        actions: {
+          version: actionLibrary.version || "unknown",
+          total: (actionLibrary.actions || []).length,
+          enabled: activeActions.length,
+          cached: actionCache,
+          url: ACTION_LIBRARY_URL,
+        },
+        kaomoji: {
+          version: kaomojiLibrary.version || "unknown",
+          groups: (kaomojiLibrary.groups || []).length,
+          enabledGroups: activeKaomojiGroups.length,
+          items: activeKaomojiItems.length,
+          cached: kaomojiCache,
+          url: KAOMOJI_LIBRARY_URL,
+        },
+      },
+      peers: {
+        count: nekoPeers.size,
+        members: Array.from(nekoPeers, ([memberNumber, peer]) => ({
+          memberNumber,
+          version: peer.version || "unknown",
+          seenSecondsAgo: Math.round((Date.now() - peer.time) / 1000),
+        })),
+      },
+      generatedAt: new Date().toISOString(),
+    };
+  }
 
   function loadConfig() {
     try {

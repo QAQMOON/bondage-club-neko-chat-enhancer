@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>猫娘插件自检页</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7fbff;
+      --panel: #ffffff;
+      --text: #2d3c45;
+      --muted: #64727c;
+      --line: #d9e7ef;
+      --ok: #2f9e68;
+      --warn: #c98616;
+      --bad: #d64550;
+      --accent: #5eb7d9;
+      --soft: #eef9fc;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+      line-height: 1.55;
+    }
+
+    main {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 34px 18px 48px;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      align-items: flex-end;
+      padding-bottom: 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(28px, 4vw, 42px);
+      letter-spacing: 0;
+    }
+
+    h2 {
+      margin: 0 0 12px;
+      font-size: 22px;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 6px 0 0;
+      color: var(--muted);
+    }
+
+    a {
+      color: #276d8a;
+      font-weight: 700;
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    button {
+      min-height: 38px;
+      padding: 0 14px;
+      border: 1px solid #92cadf;
+      border-radius: 8px;
+      background: var(--accent);
+      color: #ffffff;
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    button.secondary {
+      background: #ffffff;
+      color: #276d8a;
+    }
+
+    .toolbar {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 14px;
+      margin-top: 18px;
+    }
+
+    section,
+    .item {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: 0 12px 28px rgba(62, 118, 142, 0.08);
+    }
+
+    section {
+      margin-top: 18px;
+      padding: 18px;
+    }
+
+    .item {
+      padding: 14px;
+    }
+
+    .row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: flex-start;
+    }
+
+    .name {
+      font-weight: 800;
+    }
+
+    .meta {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 14px;
+      overflow-wrap: anywhere;
+    }
+
+    .status {
+      flex: 0 0 auto;
+      min-width: 68px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      text-align: center;
+      font-size: 13px;
+      font-weight: 800;
+      background: var(--soft);
+      color: var(--muted);
+    }
+
+    .status.ok {
+      background: #e8f8ef;
+      color: var(--ok);
+    }
+
+    .status.warn {
+      background: #fff6df;
+      color: var(--warn);
+    }
+
+    .status.bad {
+      background: #ffecef;
+      color: var(--bad);
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 180px;
+      resize: vertical;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      color: var(--text);
+      font: 14px/1.5 Consolas, "Cascadia Mono", monospace;
+    }
+
+    pre {
+      margin: 12px 0 0;
+      padding: 12px;
+      overflow: auto;
+      border-radius: 8px;
+      background: #1f2a30;
+      color: #eaf7fb;
+      font-size: 13px;
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .summary div {
+      padding: 10px;
+      border-radius: 8px;
+      background: var(--soft);
+    }
+
+    .summary strong {
+      display: block;
+      font-size: 20px;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>猫娘插件自检页</h1>
+        <p>检查 GitHub 资源、安装入口、远程动作库和颜文字库；游戏内状态可通过控制台诊断 JSON 分析。</p>
+      </div>
+      <div class="toolbar">
+        <button id="run-checks">重新检查</button>
+        <a href="https://github.com/QAQMOON/meow-" target="_blank" rel="noreferrer">GitHub 仓库</a>
+      </div>
+    </header>
+
+    <section>
+      <h2>线上资源</h2>
+      <div id="resource-list" class="grid"></div>
+    </section>
+
+    <section>
+      <h2>安装入口</h2>
+      <div class="grid">
+        <div class="item">
+          <div class="name">FUSAM 插件管理器</div>
+          <div class="meta"><a href="https://sidiousious.gitlab.io/bc-addon-loader/" target="_blank" rel="noreferrer">打开 FUSAM</a></div>
+        </div>
+        <div class="item">
+          <div class="name">油猴正式版</div>
+          <div class="meta"><a href="https://github.com/QAQMOON/meow-/raw/main/bondage-club-neko.user.js" target="_blank" rel="noreferrer">安装正式版入口</a></div>
+        </div>
+        <div class="item">
+          <div class="name">油猴测试版</div>
+          <div class="meta"><a href="https://github.com/QAQMOON/meow-/raw/main/bondage-club-neko-dev.user.js" target="_blank" rel="noreferrer">安装测试版入口</a></div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>游戏内诊断</h2>
+      <p>在游戏页面按 F12 打开控制台，输入下面命令，把输出复制到这里分析。</p>
+      <pre>JSON.stringify(BCNekoEnhancer.diagnostic(), null, 2)</pre>
+      <textarea id="diagnostic-input" placeholder="把 diagnostic JSON 粘贴到这里"></textarea>
+      <div class="toolbar" style="margin-top: 10px;">
+        <button id="analyze-diagnostic">分析诊断</button>
+        <button id="clear-diagnostic" class="secondary">清空</button>
+      </div>
+      <div id="diagnostic-output"></div>
+    </section>
+  </main>
+  <script src="./check.js"></script>
+</body>
+</html>
