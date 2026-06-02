@@ -659,13 +659,77 @@
     return text.startsWith("悄悄喵~") ? text : `悄悄喵~ ${text}`;
   }
 
-  function convertByType(type, text) {
+  function getCharacterEffects(character) {
+    if (!character) return [];
+    if (Array.isArray(character.Effect)) return character.Effect.filter(Boolean);
+    try {
+      const effects = typeof W.CharacterGetEffects === "function" ? W.CharacterGetEffects(character) : [];
+      return Array.isArray(effects) ? effects.filter(Boolean) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function hasAnyEffect(character, names) {
+    const effects = getCharacterEffects(character).map((effect) => String(effect || "").trim().toLowerCase());
+    const patterns = (names || []).map((name) => String(name || "").trim().toLowerCase()).filter(Boolean);
+    return patterns.some((pattern) => effects.some((effect) => effect === pattern || effect.includes(pattern) || pattern.includes(effect)));
+  }
+
+  function detectPlayerGagState() {
+    const character = W.Player || null;
+    const gagLevel = hasAnyEffect(character, ["gagveryheavy", "gagheavy", "gagtotal", "gaggedheavy"])
+      ? 3
+      : hasAnyEffect(character, ["gagmedium", "gag", "gagged"])
+        ? 2
+        : hasAnyEffect(character, ["gaglight"])
+          ? 1
+          : 0;
+    const gagged = gagLevel > 0 || (() => {
+      try {
+        return character?.CanTalk?.() === false;
+      } catch {
+        return false;
+      }
+    })();
+    return { gagged, gagLevel };
+  }
+
+  function applyGagSpeech(text, gagLevel, type = "Chat") {
+    if (!text || !gagLevel || gagLevel <= 0) return text;
+    let value = String(text).trim();
+    if (!value) return text;
+    const splitIndex = value.search(/[，。！？,.!?]/);
+    if (gagLevel >= 3) {
+      const core = splitIndex >= 0 ? value.slice(0, splitIndex) : value;
+      return `${core.slice(0, 8) || "唔"}……唔喵`;
+    }
+    if (gagLevel === 2) {
+      if (splitIndex >= 0) value = value.slice(0, Math.max(6, splitIndex));
+      value = value.replace(/[啊呀啦哦呢嘛]/g, "唔").replace(/[，。！？,.!?]+/g, "…");
+      return /唔喵|嗯唔/.test(value) ? value : `${value}……唔喵`;
+    }
+    value = value.replace(/[啊呀啦哦]/g, "唔");
+    if (type === "Whisper") return `${value}…唔`;
+    return /唔|喵/.test(value) ? `${value}…` : `${value} 唔喵`;
+  }
+
+  function applyLocalStateSpeechEffects(type, text) {
+    if (!["Chat", "Whisper", "Emote"].includes(type)) return text;
+    const state = detectPlayerGagState();
+    if (!state.gagged) return text;
+    return applyGagSpeech(text, state.gagLevel, type);
+  }
+
+  function convertByType(type, text, options = {}) {
     if (!config.enabled || !text) return text;
-    if (type === "Whisper") return whisperNeko(text);
-    if (type === "Emote") return emoteNeko(text);
-    if (type === "Action" || type === "Activity") return actionNeko(text);
-    if (type === "Chat") return standardNeko(text);
-    return text;
+    let value = text;
+    if (type === "Whisper") value = whisperNeko(text);
+    else if (type === "Emote") value = emoteNeko(text);
+    else if (type === "Action" || type === "Activity") value = actionNeko(text);
+    else if (type === "Chat") value = standardNeko(text);
+    if (options.applyGag) value = applyLocalStateSpeechEffects(type, value);
+    return value;
   }
 
   function shouldConvertDisplay(data, msg) {
@@ -815,7 +879,7 @@
 
     bcModApi.hookFunction("ChatRoomGenerateChatRoomChatMessage", 0, (args, next) => {
       const [type, msg, replyId] = args;
-      const nextMsg = config.convertOutgoing ? convertByType(type, msg) : msg;
+      const nextMsg = config.convertOutgoing ? convertByType(type, msg, { applyGag: true }) : msg;
       return next([type, nextMsg, replyId]);
     });
 
@@ -823,7 +887,9 @@
       const [data, msg, senderCharacter, metadata] = args;
       handleNekoPeerSignal(data);
       maybeSpawnAtmosphere(data, msg);
-      const nextMsg = shouldConvertDisplay(data, msg) ? convertByType(data?.Type, msg) : msg;
+      const nextMsg = shouldConvertDisplay(data, msg)
+        ? convertByType(data?.Type, msg, { applyGag: isOwnSender(data?.Sender) })
+        : msg;
       const div = next([data, nextMsg, senderCharacter, metadata]);
       decorateMessage(div, data);
       if (config.notifyIncoming && data?.Sender && !isOwnSender(data.Sender) && ["Chat", "Whisper"].includes(data.Type)) {
