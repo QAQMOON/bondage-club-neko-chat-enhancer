@@ -108,6 +108,19 @@
   const ESCAPE_DEFAULT_EASY_VALUE = 99;
   const SIGNATURE_TAILS = [" ฅ^•ﻌ•^ฅ", " (=^･ω･^=)", " ᓚ₍ ^. .^₎", " ~喵尾巴"];
   const RELATION_HINT_COOLDOWN = 8000;
+  const HABIT_STORE_KEY = "bcNekoEnhancer.habitProfile.bug";
+  const TAIL_MOOD_MAX = 6;
+  const AFFECTION_COMBO_WINDOW = 14000;
+  const AFFECTION_REACTION_COOLDOWN = 7000;
+  const REPLY_SUGGESTION_DURATION = 16000;
+  const AFFECTION_KEYWORDS = /(摸头|摸摸|抱抱|贴贴|亲亲|亲一口|蹭蹭|蹭)/;
+  const REPLY_SUGGESTION_LIBRARY = [
+    { pattern: /晚安|好梦|困困|睡觉/, replies: ["晚安喵，做个甜甜的梦呀", "猫猫也要缩进被窝啦，晚安喵", "睡醒再来贴贴喵"] },
+    { pattern: /摸摸|摸头/, replies: ["给你蹭一下喵", "耳朵都被摸热啦喵", "再摸一下也可以喵"] },
+    { pattern: /抱抱/, replies: ["抱住不撒爪喵", "给你一个软乎乎的抱抱喵", "已经贴过来啦喵"] },
+    { pattern: /贴贴|蹭蹭|蹭/, replies: ["贴过去一点喵", "尾巴也想跟着蹭蹭喵", "好哦，给你贴贴喵"] },
+    { pattern: /亲亲|亲一口/, replies: ["会害羞的喵", "偷偷回你一个小亲亲喵", "耳朵都红起来了喵"] },
+  ];
   const THEME_PRESETS = {
     sakura: {
       label: "樱粉",
@@ -265,11 +278,17 @@
   let escapePickTimer = 0;
   let escapeGoddessMode = false;
   let escapeGoddessBoostGranted = false;
+  let tailMoodCount = 0;
+  let affectionReactionAt = 0;
+  let replySuggestionTimer = 0;
+  let activeReplySuggestions = [];
+  const intimacyCombo = { count: 0, lastAt: 0, sender: 0 };
   const relationshipHintTimes = new Map();
   const nekoPeers = new Map();
   const badgeHitboxes = new Map();
   const characterAnchors = new Map();
   const atmosphereParticles = [];
+  const habitProfile = loadHabitProfile();
 
   console.log(`[BC 猫娘增强] v${VERSION} userscript injected:`, location.href);
   W.BCNekoEnhancer = {
@@ -1136,8 +1155,58 @@
     return group?.items?.length ? group.items : getActiveKaomojiItems();
   }
 
+  function createHabitProfile() {
+    const tails = ["喵~", "呜喵", "呼噜", "蹭蹭喵"];
+    const styles = ["gentle", "playful", "cozy"];
+    const groups = getVisibleKaomojiGroups();
+    return normalizeHabitProfile({
+      tail: tails[Math.floor(Math.random() * tails.length)],
+      kaomojiBias: groups[Math.floor(Math.random() * Math.max(groups.length, 1))]?.id || "all",
+      actionStyle: styles[Math.floor(Math.random() * styles.length)],
+    });
+  }
+
+  function normalizeHabitProfile(source = {}) {
+    const tails = ["喵~", "呜喵", "呼噜", "蹭蹭喵"];
+    const styles = ["gentle", "playful", "cozy"];
+    const validGroups = new Set(["all", ...getVisibleKaomojiGroups().map((group) => group.id)]);
+    return {
+      tail: tails.includes(source?.tail) ? source.tail : tails[0],
+      kaomojiBias: validGroups.has(source?.kaomojiBias) ? source.kaomojiBias : "all",
+      actionStyle: styles.includes(source?.actionStyle) ? source.actionStyle : "gentle",
+    };
+  }
+
+  function loadHabitProfile() {
+    try {
+      const raw = localStorage.getItem(HABIT_STORE_KEY);
+      return raw ? normalizeHabitProfile(JSON.parse(raw)) : createHabitProfile();
+    } catch {
+      return createHabitProfile();
+    }
+  }
+
+  function saveHabitProfile() {
+    try {
+      localStorage.setItem(HABIT_STORE_KEY, JSON.stringify(normalizeHabitProfile(habitProfile)));
+    } catch {
+      // Ignore storage failure; this is only local flavor state.
+    }
+  }
+
+  function habitStyleLabel() {
+    if (habitProfile.actionStyle === "playful") return "活泼";
+    if (habitProfile.actionStyle === "cozy") return "黏人";
+    return "温柔";
+  }
+
+  function preferredKaomojiItems() {
+    const preferred = getKaomojiItemsForGroup(habitProfile.kaomojiBias);
+    return preferred.length ? preferred : getActiveKaomojiItems();
+  }
+
   function pickRandomKaomoji() {
-    const items = getActiveKaomojiItems();
+    const items = Math.random() < 0.68 ? preferredKaomojiItems() : getActiveKaomojiItems();
     return items[Math.floor(Math.random() * items.length)] || DEFAULT_KAOMOJI[0];
   }
 
@@ -1485,6 +1554,139 @@
     return `${value}${SIGNATURE_TAILS[Math.floor(Math.random() * SIGNATURE_TAILS.length)]}`;
   }
 
+  function applyHabitTail(type, text) {
+    if (!["Chat", "Whisper"].includes(type)) return text;
+    const value = String(text || "").trim();
+    if (!value || hasKnownKaomoji(value)) return text;
+    const escapedTail = habitProfile.tail.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (new RegExp(`${escapedTail}$`).test(value)) return text;
+    if (Math.random() > 0.26) return text;
+    return `${value} ${habitProfile.tail}`;
+  }
+
+  function updateTailMoodUi() {
+    const badge = document.getElementById("bcn-tail-meter");
+    if (!badge) return;
+    badge.textContent = `${tailMoodCount}/${TAIL_MOOD_MAX}`;
+    badge.dataset.full = tailMoodCount >= TAIL_MOOD_MAX ? "1" : "0";
+    badge.title = `尾巴心情 ${tailMoodCount}/${TAIL_MOOD_MAX} | 习惯尾巴：${habitProfile.tail} | 动作偏好：${habitStyleLabel()}`;
+  }
+
+  function triggerTailMoodBurst(reason = "") {
+    tailMoodCount = 0;
+    updateTailMoodUi();
+    pawRain("Chat");
+    spawnAtmosphereForMember(W.Player, "抱抱 贴贴 亲亲", null, 3);
+    showToast(reason ? `尾巴开心地晃个不停喵，${reason}~` : "尾巴开心地晃个不停喵~");
+  }
+
+  function incrementTailMood(reason = "") {
+    tailMoodCount = Math.min(TAIL_MOOD_MAX, tailMoodCount + 1);
+    updateTailMoodUi();
+    if (tailMoodCount >= TAIL_MOOD_MAX) triggerTailMoodBurst(reason);
+  }
+
+  function registerAffectionCombo(sender, text) {
+    if (!AFFECTION_KEYWORDS.test(String(text || ""))) return 0;
+    const now = Date.now();
+    const senderNumber = memberNumberOf(sender) || 0;
+    if (senderNumber && intimacyCombo.sender === senderNumber && now - intimacyCombo.lastAt <= AFFECTION_COMBO_WINDOW) {
+      intimacyCombo.count = Math.min(3, intimacyCombo.count + 1);
+    } else if (!senderNumber && now - intimacyCombo.lastAt <= AFFECTION_COMBO_WINDOW) {
+      intimacyCombo.count = Math.min(3, intimacyCombo.count + 1);
+    } else {
+      intimacyCombo.count = 1;
+    }
+    intimacyCombo.lastAt = now;
+    intimacyCombo.sender = senderNumber;
+    return intimacyCombo.count;
+  }
+
+  function maybeReactToIncomingAffection(data, text) {
+    if (!data || isOwnSender(data?.Sender) || !AFFECTION_KEYWORDS.test(String(text || ""))) return;
+    const now = Date.now();
+    if (now - affectionReactionAt < AFFECTION_REACTION_COOLDOWN) return;
+    affectionReactionAt = now;
+    const lines = [
+      "猫耳轻轻抖了抖喵。",
+      "尾巴没忍住晃了一下喵。",
+      "心口像被轻轻蹭了一下喵。",
+    ];
+    showToast(lines[Math.floor(Math.random() * lines.length)]);
+    spawnAtmosphereForMember(W.Player, "贴贴 抱抱", getRelationshipStatus(data.Sender), 2);
+  }
+
+  function collectReplySuggestions(text) {
+    const value = String(text || "");
+    const suggestions = [];
+    for (const entry of REPLY_SUGGESTION_LIBRARY) {
+      if (!entry?.pattern?.test?.(value)) continue;
+      for (const reply of entry.replies || []) {
+        if (reply && !suggestions.includes(reply)) suggestions.push(reply);
+      }
+    }
+    return suggestions.slice(0, 4);
+  }
+
+  function renderReplySuggestions() {
+    const panel = document.getElementById("bcn-panel");
+    const wrap = document.getElementById("bcn-reply-suggestions");
+    if (!panel || !wrap) return;
+    wrap.innerHTML = "";
+    panel.classList.toggle("has-replies", activeReplySuggestions.length > 0);
+    if (!activeReplySuggestions.length) return;
+    const title = document.createElement("div");
+    title.className = "bcn-reply-title";
+    title.textContent = "猫猫回应建议";
+    wrap.appendChild(title);
+    activeReplySuggestions.forEach((reply) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "bcn-reply-chip";
+      button.textContent = reply;
+      button.title = "点一下填入聊天框";
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        insertReplySuggestion(reply);
+      });
+      wrap.appendChild(button);
+    });
+  }
+
+  function hideReplySuggestions() {
+    activeReplySuggestions = [];
+    clearTimeout(replySuggestionTimer);
+    replySuggestionTimer = 0;
+    renderReplySuggestions();
+  }
+
+  function showReplySuggestions(suggestions) {
+    activeReplySuggestions = Array.from(new Set((suggestions || []).filter(Boolean))).slice(0, 4);
+    renderReplySuggestions();
+    clearTimeout(replySuggestionTimer);
+    if (!activeReplySuggestions.length) return;
+    replySuggestionTimer = setTimeout(() => hideReplySuggestions(), REPLY_SUGGESTION_DURATION);
+  }
+
+  function insertReplySuggestion(text) {
+    const input = getChatInput();
+    if (!input) {
+      showToast("还没找到聊天框喵。");
+      return;
+    }
+    const oldValue = input.value || "";
+    const glue = oldValue && !/\s$/.test(oldValue) ? " " : "";
+    input.value = `${oldValue}${glue}${text}`;
+    input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    input.focus();
+    if (typeof input.setSelectionRange === "function") {
+      const pos = input.value.length;
+      input.setSelectionRange(pos, pos);
+    }
+    showToast("把小回应放进聊天框啦喵。");
+    hideReplySuggestions();
+  }
+
   function applyRpChatRules(text, tone) {
     const chat = tone?.chat || {};
     let value = relationHonorific(String(text || ""));
@@ -1717,6 +1919,7 @@
     else if (type === "Action" || type === "Activity") value = actionNeko(text);
     else if (type === "Chat") value = standardNeko(text);
     if (options.applyGag) value = applyLocalStateSpeechEffects(type, value);
+    if (options.habitTail) value = applyHabitTail(type, value);
     if (options.signatureTail) value = applySignatureTail(type, value);
     return value;
   }
@@ -1831,8 +2034,10 @@
     const nameEl = div?.querySelector?.(".ChatMessageName");
     if (!nameEl) return;
     const existing = nameEl.querySelector(".bcn-relation-badge");
+    const tail = nameEl.querySelector(".bcn-relation-tail");
     if (!relation) {
       existing?.remove();
+      tail?.remove();
       delete nameEl.dataset.bcnRelationBadge;
       return;
     }
@@ -1841,6 +2046,11 @@
     icon.textContent = relation === "owner" ? "🐾" : relation === "lover" ? "❤" : "❤🐾";
     icon.setAttribute("aria-hidden", "true");
     if (!existing) nameEl.prepend(icon);
+    const suffix = tail || document.createElement("span");
+    suffix.className = `bcn-relation-tail bcn-relation-tail-${relation}`;
+    suffix.textContent = relation === "owner" ? " ✦" : relation === "lover" ? " ❤" : " ❤✦";
+    suffix.setAttribute("aria-hidden", "true");
+    if (!tail) nameEl.append(suffix);
     nameEl.dataset.bcnRelationBadge = relation;
   }
 
@@ -1927,7 +2137,7 @@
       const [type, msg, replyId] = args;
       const nextMsg = shouldSkipGeneratedEmoteConvert(type)
         ? msg
-        : config.convertOutgoing || bugRp.enabled ? convertByType(type, msg, { applyGag: true, signatureTail: true }) : msg;
+        : config.convertOutgoing || bugRp.enabled ? convertByType(type, msg, { applyGag: true, habitTail: true, signatureTail: true }) : msg;
       return next([type, nextMsg, replyId]);
     });
 
@@ -1936,6 +2146,9 @@
       handleNekoPeerSignal(data);
       maybeSpawnAtmosphere(data, msg);
       maybeShowRelationshipHint(data);
+      maybeReactToIncomingAffection(data, msg);
+      const suggestions = collectReplySuggestions(msg);
+      if (suggestions.length && !isOwnSender(data?.Sender)) showReplySuggestions(suggestions);
       const nextMsg = shouldConvertDisplay(data, msg)
         ? convertByType(data?.Type, msg, { applyGag: isOwnSender(data?.Sender) })
         : msg;
@@ -1955,6 +2168,9 @@
       if (message === "ChatRoomChat" && config.enabled && config.rainOnSend) {
         const type = payload?.Type;
         if (["Chat", "Whisper", "Emote", "Action"].includes(type)) pawRain(type);
+      }
+      if (message === "ChatRoomChat" && config.enabled && ["Chat", "Whisper", "Emote", "Action"].includes(payload?.Type)) {
+        incrementTailMood(payload?.Type);
       }
       return next(args);
     });
@@ -2158,7 +2374,8 @@
     const text = String(message || data.Content || "");
     if (!ATMOSPHERE_KEYWORDS.test(text)) return;
     atmosphereMessages.add(data);
-    spawnAtmosphereForMember(data.Sender, text, getRelationshipStatus(data.Sender));
+    const combo = registerAffectionCombo(data.Sender, text);
+    spawnAtmosphereForMember(data.Sender, text, getRelationshipStatus(data.Sender), combo);
   }
 
   function getAtmosphereProfile(text, relation) {
@@ -2184,13 +2401,14 @@
     return { icons: ["🐾", "💗", "💕"], countMin: 1, countMax: 3, lifeMin: 1400, lifeMax: 1900 };
   }
 
-  function spawnAtmosphereForMember(sender, text = "", relation = null) {
+  function spawnAtmosphereForMember(sender, text = "", relation = null, comboLevel = 1) {
     const memberNumber = memberNumberOf(sender);
     const anchor = characterAnchors.get(memberNumber) || characterAnchors.get(memberNumberOf(W.Player));
     if (!anchor) return;
     const profile = getAtmosphereProfile(text, relation);
     const icons = profile.icons;
-    const count = profile.countMin + Math.floor(Math.random() * (profile.countMax - profile.countMin + 1));
+    const extra = Math.max(0, Math.min(2, Number(comboLevel || 1) - 1));
+    const count = profile.countMin + Math.floor(Math.random() * (profile.countMax - profile.countMin + 1)) + extra;
     for (let i = 0; i < count; i++) {
       atmosphereParticles.push({
         text: icons[Math.floor(Math.random() * icons.length)],
@@ -2529,6 +2747,15 @@
     return cleanLines[Math.floor(Math.random() * cleanLines.length)];
   }
 
+  function pickHabitActionLine(lines, fallback = "") {
+    const cleanLines = Array.isArray(lines) ? lines.filter(Boolean) : [];
+    if (!cleanLines.length) return fallback;
+    if (cleanLines.length === 1) return cleanLines[0];
+    if (habitProfile.actionStyle === "cozy") return cleanLines[cleanLines.length - 1];
+    if (habitProfile.actionStyle === "playful") return cleanLines[Math.min(cleanLines.length - 1, Math.floor(cleanLines.length / 2))];
+    return cleanLines[0];
+  }
+
   function actionActor() {
     const preset = bugRp.tonePreset;
     if (preset === "classic") return "咱喵";
@@ -2657,6 +2884,20 @@
     const fallbackLine = line.replace(/\{target\}/g, hasTarget ? getCharacterName(target) : "身边的猫猫");
     return formatRpActionText(action, target, fallbackLine);
   }
+
+  formatActionText = function(action, target) {
+    const hasTarget = !!target;
+    const state = hasTarget ? detectCharacterState(target) : detectPlayerActionCapability();
+    const variant = chooseActionVariant(action, state, hasTarget);
+    const pool = variant?.lines
+      || (hasTarget ? action?.target : action?.self)
+      || (hasTarget ? action?.self : action?.target)
+      || [];
+    const fallback = hasTarget ? "{target}闈犺繎浜嗕竴鐐瑰柕~" : "杞昏交鏅冧簡鏅冨熬宸村柕~";
+    const line = pickHabitActionLine(pool, fallback);
+    const fallbackLine = line.replace(/\{target\}/g, hasTarget ? getCharacterName(target) : "韬竟鐨勭尗鐚?");
+    return formatRpActionText(action, target, fallbackLine);
+  };
 
   function sendEmote(text) {
     const input = getChatInput();
@@ -3094,11 +3335,13 @@
     const panel = document.createElement("div");
     panel.id = "bcn-panel";
     panel.innerHTML = `
+      <span id="bcn-tail-meter" aria-hidden="true">0/${TAIL_MOOD_MAX}</span>
       <button class="bcn-btn" id="bcn-main-cat" type="button" title="展开猫猫菜单，按住可拖动，长按 10 秒切换猫娘模式">🐱</button>
       <div id="bcn-submenu">
         <button class="bcn-btn" id="bcn-wheel-handle" type="button" title="展开动作轮盘">🐱</button>
         <button class="bcn-btn" id="bcn-face" type="button" title="打开猫猫颜文字，长按 2 秒也可打开">🐱</button>
       </div>
+      <div id="bcn-reply-suggestions" aria-label="reply suggestions"></div>
       <div class="bcn-wheel-wrap">
         <div id="bcn-wheel"></div>
       </div>
@@ -3119,6 +3362,9 @@
     syncWheelPosition(panel);
     renderWheel();
     renderKaomojiPicker();
+    renderReplySuggestions();
+    updateTailMoodUi();
+    saveHabitProfile();
     syncBodyState();
   }
 
@@ -3558,6 +3804,78 @@
         color: var(--bcn-icon);
         font-size: 54px;
         text-shadow: 0 8px 24px var(--bcn-glow);
+      }
+
+      #bcn-tail-meter {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 52px;
+        height: 24px;
+        margin-right: 2px;
+        padding: 0 8px;
+        border: 2px solid var(--bcn-border);
+        border-radius: 999px;
+        background: linear-gradient(180deg, var(--bcn-panel) 0%, var(--bcn-soft) 100%);
+        color: var(--bcn-accent);
+        font-size: 12px;
+        font-weight: 800;
+        box-shadow: 0 3px 0 var(--bcn-glow);
+        white-space: nowrap;
+      }
+
+      #bcn-tail-meter[data-full="1"] {
+        color: #d86a8e;
+        border-color: var(--bcn-accent);
+        box-shadow: 0 0 0 3px var(--bcn-glow), 0 3px 0 var(--bcn-glow);
+      }
+
+      #bcn-reply-suggestions {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        max-width: 0;
+        opacity: 0;
+        overflow: hidden;
+        transform: translateX(-6px);
+        transition: max-width 0.22s ease, opacity 0.22s ease, transform 0.22s ease;
+        pointer-events: none;
+      }
+
+      #bcn-panel.has-replies #bcn-reply-suggestions {
+        max-width: 340px;
+        opacity: 1;
+        transform: translateX(0);
+        pointer-events: auto;
+      }
+
+      .bcn-reply-title {
+        color: var(--bcn-muted);
+        font-size: 11px;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+
+      .bcn-reply-chip {
+        height: 34px;
+        max-width: 128px;
+        padding: 0 10px;
+        border: 2px solid var(--bcn-border);
+        border-radius: 12px;
+        background: linear-gradient(180deg, var(--bcn-panel) 0%, var(--bcn-soft) 100%);
+        color: var(--bcn-text);
+        font-size: 12px;
+        font-weight: 700;
+        cursor: pointer;
+        box-shadow: 0 2px 0 var(--bcn-glow);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .bcn-reply-chip:hover {
+        transform: translateY(-1px);
+        background: var(--bcn-soft);
       }
 
       #bcn-panel {
