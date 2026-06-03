@@ -688,41 +688,31 @@
   }
 
   function getSpeechModeLabel(speechState) {
-    const mode = typeof speechState === "object" ? speechState?.speechMode : speechState;
-    if (mode === "moan") return "\u53ea\u80fd\u545c\u54bd";
-    if (mode === "short") return "\u53ea\u80fd\u77ed\u53e5";
-    if (mode === "heavy") return "\u91cd\u5835\u5634";
-    if (mode === "light") return "\u8f7b\u5835\u5634";
+    const gagLevel = typeof speechState === "object" ? Number(speechState?.gagLevel || 0) : Number(speechState || 0);
+    if (gagLevel >= 3) return "\u91cd\u5835\u5634";
+    if (gagLevel === 2) return "\u4e2d\u5835\u5634";
+    if (gagLevel === 1) return "\u8f7b\u5835\u5634";
     return "\u6b63\u5e38";
   }
 
   function applyGagSpeech(text, speechState, type = "Chat") {
     const gagLevel = typeof speechState === "object" ? Number(speechState?.gagLevel || 0) : Number(speechState || 0);
-    const speechMode = typeof speechState === "object"
-      ? (speechState?.speechMode || "clear")
-      : (gagLevel >= 4 ? "moan" : gagLevel === 3 ? "short" : gagLevel === 2 ? "heavy" : gagLevel === 1 ? "light" : "clear");
     if (!text || !gagLevel || gagLevel <= 0) return text;
     let value = String(text).trim();
     if (!value) return text;
-    const splitIndex = value.search(/[,.!?;:\u3002\uff01\uff1f\uff0c\uff1b\uff1a]/);
-    if (speechMode === "moan") {
-      if (type === "Emote") return "\u545c\u2026\u2026\u55b5\u2026\u2026";
-      if (type === "Whisper") return "\u545c\u5514\u2026\u2026\u55b5\u2026";
-      return "\u5514\u2026\u2026\u55b5\u545c\u2026\u2026";
-    }
-    if (speechMode === "short") {
+    const splitIndex = value.search(/[\uff0c\u3002\uff01\uff1f,.!?]/);
+    if (gagLevel >= 3) {
       const core = splitIndex >= 0 ? value.slice(0, splitIndex) : value;
-      const compact = core.replace(/\s+/g, "").slice(0, 6);
-      return (compact || "\u5514") + "\u2026\u2026\u55b5";
+      return `${core.slice(0, 8) || "\u5514"}\u2026\u2026\u5514\u55b5`;
     }
-    if (speechMode === "heavy") {
-      if (splitIndex >= 0) value = value.slice(0, Math.max(4, splitIndex));
-      value = value.replace(/[\u554a\u5440\u5566\u5462\u561b\u54e6\u54c7]/g, "\u5514").replace(/[,.!?;:\u3002\uff01\uff1f\uff0c\uff1b\uff1a]+/g, "\u2026");
-      return /[\u5514\u545c]/.test(value) ? value + "\u2026\u55b5" : value + "\u2026\u2026\u55b5";
+    if (gagLevel === 2) {
+      if (splitIndex >= 0) value = value.slice(0, Math.max(6, splitIndex));
+      value = value.replace(/[\u554a\u5440\u5566\u54e6\u5462\u561b]/g, "\u5514").replace(/[\uff0c\u3002\uff01\uff1f,.!?]+/g, "\u2026");
+      return /(\u5514\u55b5|\u55ef\u5514)/.test(value) ? value : `${value}\u2026\u2026\u5514\u55b5`;
     }
-    value = value.replace(/[\u554a\u5440\u5566\u5462\u561b\u54e6\u54c7]/g, "\u5514");
-    if (type === "Whisper") return value + "\u2026\u55b5";
-    return /[\u5514\u55b5]/.test(value) ? value + "\u2026" : value + " \u55b5\u5514";
+    value = value.replace(/[\u554a\u5440\u5566\u54e6]/g, "\u5514");
+    if (type === "Whisper") return `${value}\u2026\u5514`;
+    return /[\u5514\u55b5]/.test(value) ? `${value}\u2026` : `${value} \u5514\u55b5`;
   }
 
   function applyLocalStateSpeechEffects(type, text) {
@@ -1332,7 +1322,7 @@
         return [
           "[\u732b\u5a18\u5e2e\u52a9 / mode]",
           "\u4e3b\u732b\u732b\u957f\u6309 10 \u79d2\u53ef\u5207\u6362\u732b\u5a18\u6a21\u5f0f\u3002",
-          "\u73b0\u5728\u5835\u5634\u8bf4\u8bdd\u8054\u52a8\u5206\u4e3a\uff1a\u8f7b\u5835\u5634 / \u91cd\u5835\u5634 / \u53ea\u80fd\u77ed\u53e5 / \u53ea\u80fd\u545c\u54bd\u3002",
+          "\u5835\u5634\u8bf4\u8bdd\u8054\u52a8\u4f1a\u6839\u636e\u5f53\u524d\u5835\u5634\u7a0b\u5ea6\u81ea\u52a8\u538b\u7f29\u53e5\u5b50\u3002",
           "\u53d1\u9001\u8f6c\u6362\u3001\u63a5\u6536\u663e\u793a\u8f6c\u6362\u3001\u804a\u5929\u5ba4\u7f8e\u5316\u90fd\u53ef\u5728\u732b\u5a18\u8bbe\u7f6e\u9875\u8c03\u6574\u3002",
         ];
       case "theme":
@@ -1508,39 +1498,26 @@
 
   function detectCharacterState(character) {
     const cannotTalk = readCharacterMethod(character, "CanTalk", true) === false;
-    const gagLevel = hasAnyEffect(character, ["gagtotal"])
-      ? 4
-      : hasAnyEffect(character, ["gagveryheavy", "gagheavy", "gaggedheavy"])
+    const gagLevel = hasAnyEffect(character, ["gagveryheavy", "gagheavy", "gagtotal", "gaggedheavy"])
         ? 3
         : hasAnyEffect(character, ["gagmedium", "gag", "gagged"])
           ? 2
           : hasAnyEffect(character, ["gaglight"])
             ? 1
             : 0;
-    const resolvedGagLevel = cannotTalk && gagLevel < 4 ? 4 : gagLevel;
-    const speechMode = resolvedGagLevel >= 4
-      ? "moan"
-      : resolvedGagLevel === 3
-        ? "short"
-        : resolvedGagLevel === 2
-          ? "heavy"
-          : resolvedGagLevel === 1
-            ? "light"
-            : "clear";
     const kneeling = readCharacterMethod(character, "IsKneeling", undefined);
     const lying = hasAnyPose(character, ["lying", "prone", "supine"]) || hasAnyEffect(character, ["prone"]);
     const suspended = hasAnyEffect(character, ["suspended"]);
     const handsFree = readCharacterMethod(character, "CanInteract", !hasAnyEffect(character, ["block", "freeze", "restrain", "bound", "cuffed"]));
     const canMove = readCharacterMethod(character, "CanWalk", !hasAnyEffect(character, ["freeze", "tethered", "mounted", "suspended", "prone"]));
-    const gagged = resolvedGagLevel > 0 || cannotTalk;
+    const gagged = gagLevel > 0 || cannotTalk;
     const restrained = !handsFree || !canMove || hasAnyEffect(character, ["block", "freeze", "restrain", "bound", "cuffed", "tethered"]);
     const resolvedKneeling = typeof kneeling === "boolean" ? kneeling : hasAnyPose(character, ["kneel", "kneeling"]);
     const helpless = restrained && (lying || suspended || !canMove);
     return {
-      gagLevel: resolvedGagLevel,
+      gagLevel,
       gagged,
-      speechMode,
-      mouthFree: resolvedGagLevel <= 1,
+      mouthFree: gagLevel <= 1,
       handsFree,
       canMove,
       kneeling: resolvedKneeling,
