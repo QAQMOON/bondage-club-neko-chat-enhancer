@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bondage Club Neko Chat Enhancer
 // @namespace    https://penyo.ru/
-// @version      2.10.6
+// @version      2.10.7
 // @description  Bondage Club 猫娘消息转换、聊天室美化、猫爪表情雨和动作快捷轮盘
 // @author       Penyo (Modified)
 // @match        *://www.bondageprojects.com/club_game*
@@ -34,7 +34,7 @@
 
   const W = typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
   const MOD_ID = "BCNekoEnhancer";
-  const VERSION = "2.10.6";
+  const VERSION = "2.10.7";
   const STORE_KEY = "bcNekoEnhancer.config.v2";
   const MOD_SDK_URL = "https://cdn.jsdelivr.net/npm/bondage-club-mod-sdk@1.2.0/dist/bcmodsdk.js";
   const ACTION_LIBRARY_URL = "https://raw.githubusercontent.com/QAQMOON/bondage-club-neko-chat-enhancer/main/actions/catgirl-actions.json";
@@ -51,6 +51,9 @@
     PICKER: "picker",
     SELF: "self",
   };
+  const ESCAPE_SKILL_NAMES = ["Bondage", "Dressage", "Evasion", "Infiltration", "LockPicking", "SelfBondage", "Willpower"];
+  const ESCAPE_PICK_WINDOW_MS = 5000;
+  const ESCAPE_DEFAULT_EASY_VALUE = 99;
   const THEME_PRESETS = {
     sakura: {
       label: "樱粉",
@@ -193,6 +196,10 @@
   let activeKaomojiGroup = "all";
   let lastPeerSignalAt = 0;
   let lastPeerRoom = "";
+  let escapePickExpiresAt = 0;
+  let escapePickTimer = 0;
+  let escapeGoddessMode = false;
+  let escapeGoddessBoostGranted = false;
   const nekoPeers = new Map();
   const badgeHitboxes = new Map();
   const characterAnchors = new Map();
@@ -213,7 +220,15 @@
     reloadActions: loadRemoteActionLibrary,
     reloadKaomoji: loadRemoteKaomojiLibrary,
     diagnostic,
-    status: () => ({ patched, sdk: !!bcModApi, enabled: config.enabled, screen: W.CurrentScreen, url: location.href }),
+    status: () => ({
+      patched,
+      sdk: !!bcModApi,
+      enabled: config.enabled,
+      screen: W.CurrentScreen,
+      url: location.href,
+      escapePickActive: isEscapePickActive(),
+      escapeGoddessMode,
+    }),
   };
 
   function diagnostic() {
@@ -913,6 +928,22 @@
       });
     }
 
+    if (typeof W.ChatRoomClick === "function") {
+      bcModApi.hookFunction("ChatRoomClick", 10, (args, next) => {
+        const result = next(args);
+        if (isEscapePickActive()) setTimeout(() => tryConsumeEscapePick(), 0);
+        return result;
+      });
+    }
+
+    if (typeof W.DialogClick === "function") {
+      bcModApi.hookFunction("DialogClick", 10, (args, next) => {
+        const result = next(args);
+        if (isEscapePickActive()) setTimeout(() => tryConsumeEscapePick(), 0);
+        return result;
+      });
+    }
+
     if (typeof W.CommandParse === "function") {
       bcModApi.hookFunction("CommandParse", 10000, (args, next) => {
         const text = String(args?.[0] || "");
@@ -1307,6 +1338,223 @@
     return "\u81ea\u52a8\u76ee\u6807";
   }
 
+  function isPlayerCharacter(character) {
+    return !!character && !!W.Player && character.MemberNumber === W.Player.MemberNumber;
+  }
+
+  function isRestraintAppearanceItem(item) {
+    const groupName = item?.Asset?.Group?.Name;
+    return typeof groupName === "string" && groupName.startsWith("Item");
+  }
+
+  function getPlayerRestraintItems() {
+    return (W.Player?.Appearance || []).filter(isRestraintAppearanceItem);
+  }
+
+  function refreshPlayerAppearance() {
+    if (!W.Player) return;
+    if (typeof W.CharacterRefresh === "function") W.CharacterRefresh(W.Player);
+    if (W.CurrentScreen === "ChatRoom" && typeof W.ChatRoomCharacterUpdate === "function") {
+      W.ChatRoomCharacterUpdate(W.Player);
+    }
+  }
+
+  function refreshPlayerItemGroup(groupName) {
+    if (!W.Player || !groupName) return;
+    if (W.CurrentScreen === "ChatRoom" && typeof W.ChatRoomCharacterItemUpdate === "function") {
+      W.ChatRoomCharacterItemUpdate(W.Player, groupName);
+      return;
+    }
+    refreshPlayerAppearance();
+  }
+
+  function setEscapeSkillModifier(amount, durationMs) {
+    if (!W.Player || typeof W.SkillSetModifier !== "function") return false;
+    for (const skill of ESCAPE_SKILL_NAMES) {
+      W.SkillSetModifier(W.Player, skill, amount, durationMs);
+    }
+    return true;
+  }
+
+  function unlockPlayerRestraints() {
+    if (!W.Player || typeof W.InventoryUnlock !== "function") return 0;
+    let unlocked = 0;
+    for (const item of getPlayerRestraintItems()) {
+      if (!item?.Asset?.AllowLock) continue;
+      if (!item?.Property?.LockedBy) continue;
+      try {
+        W.InventoryUnlock(W.Player, item);
+        unlocked += 1;
+      } catch {}
+    }
+    if (unlocked > 0) refreshPlayerAppearance();
+    return unlocked;
+  }
+
+  function lowerPlayerRestraintDifficulty(amount) {
+    if (!W.Player) return 0;
+    const value = Math.max(0, Math.min(99, Number(amount) || ESCAPE_DEFAULT_EASY_VALUE));
+    let changed = 0;
+    for (const item of getPlayerRestraintItems()) {
+      const currentDifficulty = Number.isFinite(Number(item?.Difficulty))
+        ? Number(item.Difficulty)
+        : Number.isFinite(Number(item?.Property?.Difficulty))
+          ? Number(item.Property.Difficulty)
+          : 99;
+      const nextDifficulty = Math.max(0, currentDifficulty - value);
+      if (Number(item?.Difficulty) !== nextDifficulty) {
+        item.Difficulty = nextDifficulty;
+        changed += 1;
+      }
+      if (item?.Property && typeof item.Property === "object") {
+        item.Property.Difficulty = nextDifficulty;
+      }
+    }
+    if (changed > 0) refreshPlayerAppearance();
+    return changed;
+  }
+
+  function leaveCurrentRoomNow() {
+    let left = false;
+    if (typeof W.ChatRoomLeave === "function") {
+      W.ChatRoomLeave();
+      left = true;
+    }
+    if (typeof W.CommonSetScreen === "function") {
+      W.CommonSetScreen("Online", "ChatSearch");
+      left = true;
+    }
+    return left;
+  }
+
+  function isEscapePickActive() {
+    return escapePickExpiresAt > Date.now();
+  }
+
+  function clearEscapePickMode(message = "") {
+    escapePickExpiresAt = 0;
+    clearTimeout(escapePickTimer);
+    escapePickTimer = 0;
+    if (message) showToast(message);
+  }
+
+  function armEscapePickMode() {
+    clearEscapePickMode();
+    escapePickExpiresAt = Date.now() + ESCAPE_PICK_WINDOW_MS;
+    escapePickTimer = setTimeout(() => {
+      clearEscapePickMode("Neko pick timed out.");
+    }, ESCAPE_PICK_WINDOW_MS + 80);
+    showToast("Neko pick armed: click one of your item slots.");
+  }
+
+  function tryConsumeEscapePick() {
+    if (!isEscapePickActive()) return false;
+    const currentCharacter = W.CurrentCharacter;
+    if (!isPlayerCharacter(currentCharacter)) return false;
+    const groupName = currentCharacter?.FocusGroup?.Name || W.Player?.FocusGroup?.Name || W.DialogFocusItem?.Asset?.Group?.Name;
+    if (!groupName || typeof W.InventoryGet !== "function" || typeof W.InventoryRemove !== "function") return false;
+    const item = W.InventoryGet(W.Player, groupName);
+    if (!item || !isRestraintAppearanceItem(item)) return false;
+    W.InventoryRemove(W.Player, groupName);
+    refreshPlayerItemGroup(groupName);
+    if (typeof W.DialogLeave === "function") {
+      try {
+        W.DialogLeave();
+      } catch {}
+    }
+    clearEscapePickMode();
+    showToast(`Neko pick removed ${groupName}.`);
+    return true;
+  }
+
+  function getEscapeStatusLines() {
+    return [
+      "[Neko escape]",
+      `Goddess mode: ${escapeGoddessMode ? "ON" : "OFF"}`,
+      `Pick remove: ${isEscapePickActive() ? "ARMED" : "IDLE"}`,
+      "Commands:",
+      "/neko escape release | unlock | boost | leave | goddess on | goddess off | status",
+      "/neko easy 99",
+      "/neko pick",
+    ];
+  }
+
+  function getEscapeHelpLines() {
+    return [
+      "[Neko escape]",
+      "/neko escape release  - unlock all currently locked restraint items on yourself",
+      "/neko escape unlock   - alias of release",
+      "/neko escape boost    - +5 to escape-related skills for 1 hour",
+      "/neko escape leave    - leave the current room immediately",
+      "/neko escape goddess on|off",
+      "/neko escape status",
+      "/neko easy 99         - lower most current restraint difficulties by 99",
+      "/neko pick            - 5 second single-item remove mode",
+    ];
+  }
+
+  function handleEscapeSubcommand(parts) {
+    const action = String(parts?.[0] || "status").toLowerCase();
+    if (action === "release" || action === "unlock") {
+      const unlocked = unlockPlayerRestraints();
+      showToast(unlocked > 0 ? `Neko escape unlocked ${unlocked} restraint item(s).` : "Neko escape found no locked restraint items.");
+      return true;
+    }
+    if (action === "boost") {
+      if (!setEscapeSkillModifier(5, 3600000)) {
+        showToast("Neko escape boost is unavailable here.");
+        return true;
+      }
+      showToast("Neko escape boost active for 1 hour.");
+      return true;
+    }
+    if (action === "leave") {
+      if (!leaveCurrentRoomNow()) {
+        showToast("Neko escape leave is unavailable here.");
+        return true;
+      }
+      return true;
+    }
+    if (action === "goddess") {
+      const mode = String(parts?.[1] || "status").toLowerCase();
+      if (mode === "on") {
+        escapeGoddessMode = true;
+        unlockPlayerRestraints();
+        lowerPlayerRestraintDifficulty(99);
+        if (!escapeGoddessBoostGranted) {
+          escapeGoddessBoostGranted = setEscapeSkillModifier(10, 3600000);
+        }
+        showToast("Neko goddess mode enabled.");
+        return true;
+      }
+      if (mode === "off") {
+        escapeGoddessMode = false;
+        showToast("Neko goddess mode disabled.");
+        return true;
+      }
+      sendNekoCommandNotice(getEscapeStatusLines());
+      return true;
+    }
+    if (action === "status") {
+      sendNekoCommandNotice(getEscapeStatusLines());
+      return true;
+    }
+    sendNekoCommandNotice(getEscapeHelpLines());
+    return true;
+  }
+
+  function handleEasySubcommand(parts) {
+    const amount = Math.max(0, Math.min(99, Number(parts?.[0]) || ESCAPE_DEFAULT_EASY_VALUE));
+    const changed = lowerPlayerRestraintDifficulty(amount);
+    showToast(changed > 0 ? `Neko easy lowered ${changed} restraint difficulty value(s) by ${amount}.` : "Neko easy found no restraint items to adjust.");
+    return true;
+  }
+
+  function handlePickSubcommand() {
+    armEscapePickMode();
+    return true;
+  }
+
   function getNekoStatusLines() {
     const speechState = detectPlayerGagState();
     const gagSuffix = speechState.gagged ? " (Lv." + speechState.gagLevel + ")" : "";
@@ -1386,6 +1634,10 @@
   function handleNekoCommand(text) {
     if (!isNekoCommandText(text)) return false;
     const parts = String(text || "").trim().split(/\s+/).filter(Boolean);
+    const subcommand = String(parts[1] || "").toLowerCase();
+    if (subcommand === "escape") return handleEscapeSubcommand(parts.slice(2));
+    if (subcommand === "easy") return handleEasySubcommand(parts.slice(2));
+    if (subcommand === "pick") return handlePickSubcommand();
     const group = normalizeNekoHelpSection(parts[1] || "help");
     if (group === "main") {
       sendNekoCommandNotice(getNekoHelpLines(parts[2] || "main"));
