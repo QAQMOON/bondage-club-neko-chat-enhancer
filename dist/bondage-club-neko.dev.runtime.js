@@ -54,6 +54,8 @@
   const ESCAPE_SKILL_NAMES = ["Bondage", "Dressage", "Evasion", "Infiltration", "LockPicking", "SelfBondage", "Willpower"];
   const ESCAPE_PICK_WINDOW_MS = 5000;
   const ESCAPE_DEFAULT_EASY_VALUE = 99;
+  const SIGNATURE_TAILS = [" ฅ^•ﻌ•^ฅ", " (=^･ω･^=)", " ᓚ₍ ^. .^₎", " ~喵尾巴"];
+  const RELATION_HINT_COOLDOWN = 8000;
   const THEME_PRESETS = {
     sakura: {
       label: "樱粉",
@@ -200,6 +202,7 @@
   let escapePickTimer = 0;
   let escapeGoddessMode = false;
   let escapeGoddessBoostGranted = false;
+  const relationshipHintTimes = new Map();
   const nekoPeers = new Map();
   const badgeHitboxes = new Map();
   const characterAnchors = new Map();
@@ -738,6 +741,17 @@
     return applyGagSpeech(text, state, type);
   }
 
+  function applySignatureTail(type, text) {
+    if (!["Chat", "Whisper"].includes(type)) return text;
+    const value = String(text || "").trim();
+    if (!value || value.length > 90) return text;
+    if (hasKnownKaomoji(value)) return text;
+    if (/(\u0e45|=\)|\^\)|\u55b5\u5c3e\u5df4)\s*$/.test(value)) return text;
+    const chance = type === "Whisper" ? 0.78 : 0.48;
+    if (Math.random() > chance) return text;
+    return `${value}${SIGNATURE_TAILS[Math.floor(Math.random() * SIGNATURE_TAILS.length)]}`;
+  }
+
   function convertByType(type, text, options = {}) {
     if (!config.enabled || !text) return text;
     let value = text;
@@ -746,6 +760,7 @@
     else if (type === "Action" || type === "Activity") value = actionNeko(text);
     else if (type === "Chat") value = standardNeko(text);
     if (options.applyGag) value = applyLocalStateSpeechEffects(type, value);
+    if (options.signatureTail) value = applySignatureTail(type, value);
     return value;
   }
 
@@ -830,6 +845,29 @@
     if (owner) return "owner";
     if (lover) return "lover";
     return null;
+  }
+
+  function relationshipHintText(relation, type) {
+    const chatLike = type === "Chat" || type === "Whisper";
+    if (relation === "owner") return chatLike ? "主人的消息飘过来了喵。" : "主人刚刚对你做了互动喵。";
+    if (relation === "lover") return chatLike ? "恋人在和你说话喵。" : "恋人刚刚发来了小互动喵。";
+    return chatLike ? "最重要的人正在和你说话喵。" : "最重要的人刚刚朝你伸来了小爪子喵。";
+  }
+
+  function maybeShowRelationshipHint(data) {
+    const sender = data?.Sender;
+    const relation = getRelationshipStatus(sender);
+    if (!relation) return;
+    if (isOwnSender(sender)) return;
+    const type = data?.Type;
+    if (!["Chat", "Whisper", "Emote", "Action"].includes(type)) return;
+    const senderNumber = memberNumberOf(sender);
+    if (!senderNumber) return;
+    const key = `${senderNumber}:${relation}:${type === "Whisper" ? "chat" : type === "Chat" ? "chat" : "action"}`;
+    const now = Date.now();
+    if (now - (relationshipHintTimes.get(key) || 0) < RELATION_HINT_COOLDOWN) return;
+    relationshipHintTimes.set(key, now);
+    showToast(relationshipHintText(relation, type));
   }
 
   function applyRelationshipBadge(div, relation) {
@@ -929,7 +967,7 @@
 
     bcModApi.hookFunction("ChatRoomGenerateChatRoomChatMessage", 0, (args, next) => {
       const [type, msg, replyId] = args;
-      const nextMsg = config.convertOutgoing ? convertByType(type, msg, { applyGag: true }) : msg;
+      const nextMsg = config.convertOutgoing ? convertByType(type, msg, { applyGag: true, signatureTail: true }) : msg;
       return next([type, nextMsg, replyId]);
     });
 
@@ -937,6 +975,7 @@
       const [data, msg, senderCharacter, metadata] = args;
       handleNekoPeerSignal(data);
       maybeSpawnAtmosphere(data, msg);
+      maybeShowRelationshipHint(data);
       const nextMsg = shouldConvertDisplay(data, msg)
         ? convertByType(data?.Type, msg, { applyGag: isOwnSender(data?.Sender) })
         : msg;
@@ -1151,15 +1190,39 @@
     const text = String(message || data.Content || "");
     if (!ATMOSPHERE_KEYWORDS.test(text)) return;
     atmosphereMessages.add(data);
-    spawnAtmosphereForMember(data.Sender);
+    spawnAtmosphereForMember(data.Sender, text, getRelationshipStatus(data.Sender));
   }
 
-  function spawnAtmosphereForMember(sender) {
+  function getAtmosphereProfile(text, relation) {
+    const value = String(text || "");
+    if (/(晚安|困困|睡觉|好梦|梦里)/.test(value)) {
+      return { icons: ["💤", "🌙", "🐾"], countMin: 2, countMax: 4, lifeMin: 1600, lifeMax: 2300 };
+    }
+    if (/(贴贴|蹭蹭|抱抱|亲亲|亲一口)/.test(value)) {
+      return { icons: relation === "owner" ? ["🐾", "💛", "✨"] : ["🐾", "💕", "💗"], countMin: 2, countMax: 5, lifeMin: 1500, lifeMax: 2100 };
+    }
+    if (/(欢迎|你好呀|早安|安安|欢迎回来)/.test(value)) {
+      return { icons: ["✨", "🌸", "🐾"], countMin: 2, countMax: 4, lifeMin: 1300, lifeMax: 1900 };
+    }
+    if (relation === "owner") {
+      return { icons: ["🐾", "💛", "✨"], countMin: 2, countMax: 4, lifeMin: 1500, lifeMax: 2200 };
+    }
+    if (relation === "lover") {
+      return { icons: ["🐾", "💕", "💗"], countMin: 2, countMax: 4, lifeMin: 1500, lifeMax: 2200 };
+    }
+    if (relation === "dual") {
+      return { icons: ["🐾", "💛", "💕", "✨"], countMin: 3, countMax: 5, lifeMin: 1600, lifeMax: 2300 };
+    }
+    return { icons: ["🐾", "💗", "💕"], countMin: 1, countMax: 3, lifeMin: 1400, lifeMax: 1900 };
+  }
+
+  function spawnAtmosphereForMember(sender, text = "", relation = null) {
     const memberNumber = memberNumberOf(sender);
     const anchor = characterAnchors.get(memberNumber) || characterAnchors.get(memberNumberOf(W.Player));
     if (!anchor) return;
-    const icons = ["\uD83D\uDC3E", "\uD83D\uDC97", "\uD83D\uDC95"];
-    const count = 1 + Math.floor(Math.random() * 3);
+    const profile = getAtmosphereProfile(text, relation);
+    const icons = profile.icons;
+    const count = profile.countMin + Math.floor(Math.random() * (profile.countMax - profile.countMin + 1));
     for (let i = 0; i < count; i++) {
       atmosphereParticles.push({
         text: icons[Math.floor(Math.random() * icons.length)],
@@ -1169,7 +1232,7 @@
         vy: -(0.55 + Math.random() * 0.35) * anchor.zoom,
         size: (22 + Math.random() * 10) * anchor.zoom,
         born: Date.now(),
-        life: 1400 + Math.random() * 500,
+        life: profile.lifeMin + Math.random() * (profile.lifeMax - profile.lifeMin),
       });
     }
     if (atmosphereParticles.length > 48) {
@@ -3188,30 +3251,41 @@
 
       #TextAreaChatLog .bcn-related-owner {
         border-color: #f2d087 !important;
-        box-shadow: 0 4px 14px rgba(232, 184, 88, 0.16);
+        box-shadow: 0 4px 14px rgba(232, 184, 88, 0.16), inset 0 0 0 1px rgba(255, 232, 178, 0.55);
+        background: linear-gradient(180deg, rgba(255, 250, 236, 0.96), rgba(255, 246, 224, 0.9)) !important;
       }
 
       #TextAreaChatLog .bcn-related-owner .ChatMessageName {
         color: #af7f22 !important;
+        letter-spacing: 0;
       }
 
       #TextAreaChatLog .bcn-related-owner .bcn-relation-badge {
         color: #dfb24c;
         text-shadow: 0 1px 0 #fff6df, 0 0 8px rgba(240, 191, 92, 0.24);
+        transform: translateY(-0.02em) scale(1.05);
+      }
+
+      #TextAreaChatLog .bcn-related-lover {
+        background: linear-gradient(180deg, rgba(255, 247, 251, 0.98), rgba(255, 240, 247, 0.92)) !important;
+        box-shadow: 0 4px 14px rgba(240, 141, 180, 0.12), inset 0 0 0 1px rgba(255, 225, 236, 0.52);
       }
 
       #TextAreaChatLog .bcn-related-lover .ChatMessageName {
         color: #d06b96 !important;
+        letter-spacing: 0;
       }
 
       #TextAreaChatLog .bcn-related-lover .bcn-relation-badge {
         color: #f08db4;
         text-shadow: 0 1px 0 #fff4f8, 0 0 8px rgba(240, 141, 180, 0.2);
+        transform: translateY(-0.02em) scale(1.05);
       }
 
       #TextAreaChatLog .bcn-related-dual {
         border-color: #e9be93 !important;
-        box-shadow: 0 4px 16px rgba(232, 166, 120, 0.18);
+        box-shadow: 0 4px 16px rgba(232, 166, 120, 0.18), inset 0 0 0 1px rgba(255, 234, 208, 0.54);
+        background: linear-gradient(180deg, rgba(255, 248, 242, 0.98), rgba(255, 242, 232, 0.92)) !important;
       }
 
       #TextAreaChatLog .bcn-related-dual .ChatMessageName {
