@@ -2483,9 +2483,12 @@
   }
 
   function decorateExistingChat(root = null) {
-    const nodes = root?.querySelectorAll
-      ? root.querySelectorAll(".ChatMessage")
-      : document.querySelectorAll("#TextAreaChatLog .ChatMessage");
+    let nodes = root?.querySelectorAll
+      ? Array.from(root.querySelectorAll(".ChatMessage"))
+      : Array.from(document.querySelectorAll("#TextAreaChatLog .ChatMessage"));
+    if (!root && nodes.length > RECENT_CHAT_DECORATION_LIMIT) {
+      nodes = nodes.slice(-RECENT_CHAT_DECORATION_LIMIT);
+    }
     nodes.forEach((div) => {
       decorateMessage(div, {
         Type: div.className.match(/ChatMessage(Chat|Whisper|Emote|Action|Activity|ServerMessage|LocalMessage)/)?.[1],

@@ -209,6 +209,7 @@
   let maintenanceTimer = 0;
   let decorateTimer = 0;
   let visibilityBound = false;
+  const RECENT_CHAT_DECORATION_LIMIT = 100;
 
   console.log(`[BC 猫娘增强] v${VERSION} userscript injected:`, location.href);
   W.BCNekoEnhancer = {
@@ -1264,9 +1265,12 @@
   }
 
   function decorateExistingChat(root = null) {
-    const nodes = root?.querySelectorAll
-      ? root.querySelectorAll(".ChatMessage")
-      : document.querySelectorAll("#TextAreaChatLog .ChatMessage");
+    let nodes = root?.querySelectorAll
+      ? Array.from(root.querySelectorAll(".ChatMessage"))
+      : Array.from(document.querySelectorAll("#TextAreaChatLog .ChatMessage"));
+    if (!root && nodes.length > RECENT_CHAT_DECORATION_LIMIT) {
+      nodes = nodes.slice(-RECENT_CHAT_DECORATION_LIMIT);
+    }
     nodes.forEach((div) => {
       decorateMessage(div, {
         Type: div.className.match(/ChatMessage(Chat|Whisper|Emote|Action|Activity|ServerMessage|LocalMessage)/)?.[1],
