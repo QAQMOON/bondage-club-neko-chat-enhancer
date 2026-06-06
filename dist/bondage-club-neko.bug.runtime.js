@@ -2473,8 +2473,20 @@
     }
   }
 
-  function decorateExistingChat() {
-    document.querySelectorAll("#TextAreaChatLog .ChatMessage").forEach((div) => {
+  function scheduleDecorateChat(delay = 120) {
+    clearTimeout(decorateTimer);
+    decorateTimer = setTimeout(() => {
+      decorateTimer = 0;
+      if (document.hidden) return;
+      decorateExistingChat();
+    }, delay);
+  }
+
+  function decorateExistingChat(root = null) {
+    const nodes = root?.querySelectorAll
+      ? root.querySelectorAll(".ChatMessage")
+      : document.querySelectorAll("#TextAreaChatLog .ChatMessage");
+    nodes.forEach((div) => {
       decorateMessage(div, {
         Type: div.className.match(/ChatMessage(Chat|Whisper|Emote|Action|Activity|ServerMessage|LocalMessage)/)?.[1],
         Sender: Number(div.dataset.sender),
@@ -3374,9 +3386,92 @@
     document.body.classList.toggle("bcn-chatroom", W.CurrentScreen === "ChatRoom");
   }
 
+  function getChatLogRoot() {
+    return document.getElementById("TextAreaChatLog") || null;
+  }
+
+  function disconnectObserver() {
+    if (chatObserver) {
+      chatObserver.disconnect();
+      chatObserver = null;
+    }
+    observerRoot = null;
+  }
+
   function installObserver() {
-    const observer = new MutationObserver(() => decorateExistingChat());
-    observer.observe(document.documentElement, { childList: true, subtree: true });
+    const nextRoot = getChatLogRoot();
+    if (!nextRoot) {
+      disconnectObserver();
+      return false;
+    }
+    if (chatObserver && observerRoot === nextRoot) return true;
+    disconnectObserver();
+    chatObserver = new MutationObserver((mutations) => {
+      if (document.hidden) return;
+      for (const mutation of mutations) {
+        for (const node of mutation.addedNodes || []) {
+          if (!(node instanceof Element)) continue;
+          if (node.classList?.contains("ChatMessage")) {
+            decorateExistingChat(node);
+            continue;
+          }
+          if (node.querySelector) {
+            const nested = node.querySelector(".ChatMessage");
+            if (nested) {
+              decorateExistingChat(node);
+              continue;
+            }
+          }
+        }
+      }
+      scheduleDecorateChat(120);
+    });
+    chatObserver.observe(nextRoot, { childList: true, subtree: true });
+    observerRoot = nextRoot;
+    scheduleDecorateChat(0);
+    return true;
+  }
+
+  function runMaintenance() {
+    if (document.hidden) return;
+    installObserver();
+    patchStatusBadge();
+    patchRoomEffects();
+    registerSettingsUI();
+    syncScreenClass();
+    scheduleDecorateChat(0);
+  }
+
+  function stopMaintenance() {
+    clearTimeout(decorateTimer);
+    decorateTimer = 0;
+    if (maintenanceTimer) {
+      clearInterval(maintenanceTimer);
+      maintenanceTimer = 0;
+    }
+    disconnectObserver();
+  }
+
+  function startMaintenance() {
+    if (maintenanceTimer) return;
+    runMaintenance();
+    maintenanceTimer = setInterval(runMaintenance, 12000);
+  }
+
+  function bindVisibilityLifecycle() {
+    if (visibilityBound) return;
+    visibilityBound = true;
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) {
+        stopMaintenance();
+        return;
+      }
+      startMaintenance();
+    });
+    window.addEventListener("focus", () => {
+      if (!document.hidden) startMaintenance();
+    });
+    window.addEventListener("beforeunload", stopMaintenance, { once: true });
   }
 
   const NekoSettingsUI = (() => {
@@ -4458,30 +4553,23 @@
     loadRemoteActionLibrary();
     loadRemoteKaomojiLibrary();
     loadRemoteRpLibrary();
-    installObserver();
+    bindVisibilityLifecycle();
     syncScreenClass();
+    registerNekoCommands();
 
     const patchTimer = setInterval(() => {
       const chatReady = patchBC();
       const badgeReady = patchStatusBadge();
       const roomReady = patchRoomEffects();
       const commandReady = registerNekoCommands();
-      if (chatReady && badgeReady && roomReady && commandReady) clearInterval(patchTimer);
-      registerSettingsUI();
-      decorateExistingChat();
-      syncScreenClass();
+      if (chatReady && badgeReady && roomReady && commandReady) {
+        clearInterval(patchTimer);
+        startMaintenance();
+      }
+      runMaintenance();
     }, 800);
 
-    setInterval(() => {
-      patchStatusBadge();
-      patchRoomEffects();
-      registerNekoCommands();
-      registerSettingsUI();
-      decorateExistingChat();
-      syncScreenClass();
-    }, 2000);
-
-    console.log("[BC 猫娘增强] 启动喵~");
+    console.log("[BC ??????] ?????");
   }
 
   if (document.readyState === "loading") {
