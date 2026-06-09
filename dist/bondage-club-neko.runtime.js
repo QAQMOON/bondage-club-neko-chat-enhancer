@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bondage Club Neko Chat Enhancer
 // @namespace    https://penyo.ru/
-// @version      2.10.7
+// @version      2.10.8
 // @description  Bondage Club 猫娘消息转换、聊天室美化、猫爪表情雨和动作快捷轮盘
 // @author       Penyo (Modified)
 // @match        *://www.bondageprojects.com/club_game*
@@ -34,7 +34,7 @@
 
   const W = typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
   const MOD_ID = "BCNekoEnhancer";
-  const VERSION = "2.10.7";
+  const VERSION = "2.10.8";
   const STORE_KEY = "bcNekoEnhancer.config.v2";
   const MOD_SDK_URL = "https://cdn.jsdelivr.net/npm/bondage-club-mod-sdk@1.2.0/dist/bcmodsdk.js";
   const ACTION_LIBRARY_URL = "https://raw.githubusercontent.com/QAQMOON/bondage-club-neko-chat-enhancer/main/actions/catgirl-actions.json";
@@ -1340,6 +1340,10 @@
       "\u732b\u5a18rp": "rp",
       action: "action",
       "\u52a8\u4f5c": "action",
+      escape: "escape",
+      easy: "escape",
+      pick: "escape",
+      "\u9003\u8131": "escape",
       emoji: "emoji",
       kaomoji: "emoji",
       "\u989c\u6587\u5b57": "emoji",
@@ -1347,10 +1351,57 @@
       "\u6a21\u5f0f": "mode",
       theme: "theme",
       "\u4e3b\u9898": "theme",
+      spark: "spark",
+      "\u7075\u611f": "spark",
+      voice: "voice",
+      sound: "voice",
+      "\u58f0\u97f3": "voice",
+      reactions: "reactions",
+      reaction: "reactions",
+      interactions: "reactions",
+      "\u4e92\u52a8": "reactions",
+      mood: "mood",
+      state: "mood",
+      "\u5fc3\u60c5": "mood",
+      systems: "systems",
+      system: "systems",
+      profile: "systems",
+      sensitivity: "systems",
+      relation: "systems",
       status: "status",
       "\u72b6\u6001": "status",
     };
     return aliases[key] || aliases[raw] || "main";
+  }
+
+  function getNekoLibraryStatusLines() {
+    cleanupNekoPeers();
+    const activeActions = getActiveActions();
+    const visibleKaomojiGroups = getVisibleKaomojiGroups();
+    const activeKaomojiItems = getActiveKaomojiItems();
+    const selectedTarget = getSelectedTarget();
+    const actionTargets = getActionTargets();
+    const cached = { actions: false, kaomoji: false };
+    try {
+      cached.actions = !!localStorage.getItem(ACTION_LIBRARY_CACHE_KEY);
+      cached.kaomoji = !!localStorage.getItem(KAOMOJI_LIBRARY_CACHE_KEY);
+    } catch {
+      // Ignore storage read failures; status should still be usable.
+    }
+    return {
+      activeActions,
+      visibleKaomojiGroups,
+      activeKaomojiItems,
+      selectedTarget,
+      actionTargets,
+      cached,
+    };
+  }
+
+  function formatSelectedTargetStatus(target) {
+    if (!target) return "\u65e0";
+    const number = target.MemberNumber ? "#" + target.MemberNumber : "";
+    return getCharacterName(target) + (number ? " " + number : "");
   }
 
   function getActionTargetModeLabel() {
@@ -1579,13 +1630,23 @@
   function getNekoStatusLines() {
     const speechState = detectPlayerGagState();
     const gagSuffix = speechState.gagged ? " (Lv." + speechState.gagLevel + ")" : "";
+    const status = getNekoLibraryStatusLines();
+    const pickLeft = isEscapePickActive()
+      ? Math.max(0, Math.ceil((escapePickExpiresAt - Date.now()) / 1000)) + "s"
+      : "\u672a\u5f00\u542f";
     return [
       "[\u732b\u5a18\u72b6\u6001] Bondage Club Neko Chat Enhancer v" + VERSION + " (\u6b63\u5f0f\u7248)",
       "\u732b\u5a18\u6a21\u5f0f\uff1a" + (config.enabled ? "\u5f00\u542f" : "\u5173\u95ed"),
       "\u53d1\u9001\u8f6c\u6362\uff1a" + (config.convertOutgoing ? "\u5f00" : "\u5173") + " | \u663e\u793a\u8f6c\u6362\uff1a" + (config.convertDisplayed ? "\u5f00" : "\u5173"),
+      "\u804a\u5929\u88c5\u9970\uff1a" + (config.decorateChat ? "\u5f00" : "\u5173") + " | \u53d1\u9001\u732b\u722a\u96e8\uff1a" + (config.rainOnSend ? "\u5f00" : "\u5173") + " | \u65b0\u6d88\u606f\u63d0\u9192\uff1a" + (config.notifyIncoming ? "\u5f00" : "\u5173"),
       "\u5835\u5634\u8bf4\u8bdd\uff1a" + getSpeechModeLabel(speechState) + gagSuffix,
       "\u4e3b\u9898\uff1a" + (currentTheme().label || config.theme),
       "\u52a8\u4f5c\u76ee\u6807\uff1a" + getActionTargetModeLabel(),
+      "\u5f53\u524d\u9009\u4e2d\uff1a" + formatSelectedTargetStatus(status.selectedTarget) + " | \u53ef\u4e92\u52a8\u76ee\u6807\uff1a" + status.actionTargets.length,
+      "\u52a8\u4f5c\u5e93\uff1a" + status.activeActions.length + "/" + ((actionLibrary.actions || []).length) + " \u53ef\u7528 | \u7f13\u5b58\uff1a" + (status.cached.actions ? "\u6709" : "\u65e0") + " | v" + (actionLibrary.version || "unknown"),
+      "\u989c\u6587\u5b57\uff1a" + status.activeKaomojiItems.length + " \u4e2a | \u5206\u7ec4\uff1a" + status.visibleKaomojiGroups.length + "/" + ((kaomojiLibrary.groups || []).length) + " | \u7f13\u5b58\uff1a" + (status.cached.kaomoji ? "\u6709" : "\u65e0"),
+      "\u540c\u63d2\u4ef6\u73a9\u5bb6\uff1a" + nekoPeers.size + " | SDK\uff1a" + (bcModApi ? "\u5df2\u6ce8\u518c" : "\u672a\u6ce8\u518c") + " | hooks\uff1a" + (patched ? "\u5df2\u63a5\u5165" : "\u672a\u63a5\u5165"),
+      "\u9003\u8131\u8f85\u52a9\uff1apick " + pickLeft + " | goddess " + (escapeGoddessMode ? "ON" : "OFF"),
       "\u732b\u732b\u83dc\u5355\uff1a" + (config.menuCollapsed ? "\u5df2\u6536\u8d77" : "\u5df2\u5c55\u5f00") + " | \u5feb\u6377\u52a8\u4f5c\uff1a" + (config.quickWheel ? "\u5f00" : "\u5173"),
     ];
   }
@@ -1596,7 +1657,8 @@
         return [
           "[\u732b\u5a18\u5e2e\u52a9 / rp]",
           "\u8fd9\u4e00\u7c7b\u7528\u4e8e\u732b\u5a18 RP \u8bed\u6c14\u548c\u8f93\u51fa\u98ce\u683c\u3002",
-          "\u6b63\u5f0f\u7248 / \u6d4b\u8bd5\u7248\u6682\u4e0d\u63d0\u4f9b /neko rp \u5207\u6362\u6307\u4ee4\uff0c\u4e3b\u8981\u4f7f\u7528\u666e\u901a\u732b\u5a18\u8f6c\u6362\u3002",
+          "\u6b63\u5f0f\u7248\u6682\u4e0d\u63d0\u4f9b /neko rp \u5207\u6362\u6307\u4ee4\uff0c\u4e3b\u8981\u4f7f\u7528\u666e\u901a\u732b\u5a18\u8f6c\u6362\u3002",
+          "Bug \u7248\u63d0\u4f9b\u72ec\u7acb RP \u4eba\u8bbe\u5207\u6362\uff0c\u6d4b\u8bd5\u7248\u63d0\u4f9b\u72b6\u6001\u548c\u7075\u611f\u7cfb\u7edf\u3002",
           "\u5835\u5634\u72b6\u6001\u4f1a\u5728 RP \u8f6c\u6362\u4e4b\u540e\u518d\u505a\u538b\u5236\uff0c\u4fdd\u7559\u4eba\u8bbe\u5473\u9053\u3002",
         ];
       case "action":
@@ -1606,6 +1668,8 @@
           "\u5f53\u524d\u76ee\u6807\u6a21\u5f0f\uff1a" + getActionTargetModeLabel(),
           "\u5de6\u952e\u4f18\u5148\u5bf9\u5f53\u524d\u9009\u4e2d\u76ee\u6807\u751f\u6548\uff0c\u83dc\u5355\u5c55\u5f00\u540e\u53ef\u5feb\u6377\u4f7f\u7528\u3002",
         ];
+      case "escape":
+        return getEscapeHelpLines();
       case "emoji":
         return [
           "[\u732b\u5a18\u5e2e\u52a9 / emoji]",
@@ -1626,16 +1690,53 @@
           "\u53ef\u7528\u4e3b\u9898\uff1a\u6a31\u7c89 / \u8584\u8377 / \u5929\u7a7a / \u5976\u6cb9 / \u858b\u8863\u8349 / \u767d\u8336\u3002",
           "\u4e3b\u9898\u53ef\u5728\u6269\u5c55\u7ec4\u4ef6\u8bbe\u7f6e\u9875\u5185\u5207\u6362\u3002",
         ];
+      case "spark":
+        return [
+          "[\u732b\u5a18\u5e2e\u52a9 / spark]",
+          "\u6d4b\u8bd5\u7248\u53ef\u7528\uff1a/neko spark \u4f1a\u6839\u636e\u6700\u8fd1\u804a\u5929\u3001\u9009\u4e2d\u76ee\u6807\u548c\u89d2\u8272\u72b6\u6001\u751f\u6210 RP \u7075\u611f\u77ed\u53e5\u3002",
+          "\u6b63\u5f0f\u7248\u5f53\u524d\u672a\u542f\u7528 spark \u751f\u6210\u5668\uff0c\u5efa\u8bae\u5728\u6d4b\u8bd5\u7248\u9a8c\u8bc1\u7a33\u5b9a\u540e\u518d\u5408\u5165\u3002",
+        ];
+      case "voice":
+        return [
+          "[\u732b\u5a18\u5e2e\u52a9 / voice]",
+          "\u6d4b\u8bd5\u7248\u53ef\u7528\uff1a/neko voice <text> \u672c\u5730\u89e6\u53d1 NekoVoice\uff0c[NekoVoice] <text> \u53ef\u4ece\u804a\u5929\u5185\u89e6\u53d1\u3002",
+          "\u6548\u679c\u5305\u62ec *mew* / *purr* / *nyaa* \u89c6\u89c9\u58f0\u6548\u3001\u7c89\u8272\u95ea\u5149\u3001\u58f0\u6ce2\u5708\u3001\u5f39\u5e55\u53e3\u7656\u548c\u6c14\u606f\u7c92\u5b50\u3002",
+          "\u6b63\u5f0f\u7248\u5f53\u524d\u672a\u542f\u7528 NekoVoice\uff0c\u907f\u514d\u89c6\u89c9\u5e72\u6270\u8fc7\u5f3a\u3002",
+        ];
+      case "reactions":
+        return [
+          "[\u732b\u5a18\u5e2e\u52a9 / reactions]",
+          "\u6d4b\u8bd5\u7248\u53ef\u7528\uff1a/neko reactions \u67e5\u770b\u4e92\u52a8\u529f\u80fd\u7c7b\u76ee\uff0c/neko reactions <keyword> \u641c\u7d22\u89e6\u53d1\u7c7b\u76ee\u3002",
+          "\u529f\u80fd\u5305\u62ec\u654f\u611f\u90e8\u4f4d\u53cd\u5e94\u3001\u5bf9\u65b9\u4e92\u52a8\u53cd\u5e94\u3001\u89d2\u8272\u72b6\u6001\u53cd\u5e94\u548c\u7c92\u5b50\u53cd\u9988\u3002",
+          "\u6b63\u5f0f\u7248\u5f53\u524d\u4fdd\u7559\u57fa\u7840\u52a8\u4f5c\u8f6e\u76d8\uff0c\u672a\u542f\u7528 101 \u4e2a\u6d4b\u8bd5\u4e92\u52a8\u7c7b\u76ee\u3002",
+        ];
+      case "mood":
+        return [
+          "[\u732b\u5a18\u5e2e\u52a9 / mood]",
+          "\u6d4b\u8bd5\u7248\u53ef\u7528\uff1a/neko mood \u67e5\u770b\u72b6\u6001\uff0c/neko mood \u9ad8\u5174 | \u4f24\u5fc3 | \u9ad8\u51b7 | \u9ecf\u4eba | \u56f0\u56f0 \u7b49\u53ef\u624b\u52a8\u5207\u6362\u3002",
+          "\u72b6\u6001\u4f1a\u5f71\u54cd\u8bed\u6c14\u5c3e\u5df4\u3001\u7c92\u5b50\u548c\u4e92\u52a8\u53cd\u5e94\u3002",
+          "\u6b63\u5f0f\u7248\u5f53\u524d\u672a\u542f\u7528\u72b6\u6001\u6301\u7eed\u7cfb\u7edf\u3002",
+        ];
+      case "systems":
+        return [
+          "[\u732b\u5a18\u5e2e\u52a9 / systems]",
+          "\u6d4b\u8bd5\u7248\u53ef\u7528\uff1a/neko systems \u6216 /neko profile \u67e5\u770b\u654f\u611f\u5ea6\u6863\u6848\u3001\u5173\u7cfb\u6e29\u5ea6\u8ba1\u3001\u6301\u7eed\u72b6\u6001\u548c\u4e8b\u4ef6\u8ba1\u6570\u3002",
+          "\u654f\u611f\u5ea6\uff1aear / tail / nape / chin / belly \u4f1a\u968f\u4e92\u52a8\u7d2f\u79ef\u3002",
+          "\u5173\u7cfb\u6e29\u5ea6\uff1a\u5bf9\u65b9\u548c\u4f60\u4e92\u52a8\u8d8a\u591a\uff0cwarmth/trust/familiar \u8d8a\u9ad8\u3002",
+          "\u6b63\u5f0f\u7248\u5f53\u524d\u672a\u542f\u7528\u8fd9\u4e9b\u5b9e\u9a8c\u7cfb\u7edf\u3002",
+        ];
       case "status":
         return [
           "[\u732b\u5a18\u5e2e\u52a9 / status]",
-          "\u4f7f\u7528 /neko status \u53ef\u67e5\u770b\u5f53\u524d\u63d2\u4ef6\u72b6\u6001\u3001\u5835\u5634\u8bf4\u8bdd\u6863\u4f4d\u3001\u4e3b\u9898\u548c\u52a8\u4f5c\u76ee\u6807\u6a21\u5f0f\u3002",
+          "\u4f7f\u7528 /neko status \u53ef\u67e5\u770b\u63d2\u4ef6\u5f00\u5173\u3001\u8f6c\u6362\u5f00\u5173\u3001\u804a\u5929\u88c5\u9970\u3001\u5835\u5634\u8bf4\u8bdd\u6863\u4f4d\u3001\u4e3b\u9898\u548c\u52a8\u4f5c\u76ee\u6807\u3002",
+          "\u73b0\u5728\u4e5f\u4f1a\u663e\u793a\u52a8\u4f5c\u5e93\u3001\u989c\u6587\u5b57\u5e93\u3001\u5f53\u524d\u9009\u4e2d\u76ee\u6807\u3001\u540c\u63d2\u4ef6\u73a9\u5bb6\u3001SDK/hooks \u548c\u9003\u8131\u8f85\u52a9\u72b6\u6001\u3002",
         ];
       default:
         return [
           "[\u732b\u5a18\u547d\u4ee4\u5e2e\u52a9] /neko help <\u5206\u7c7b>",
-          "\u53ef\u7528\u5206\u7c7b\uff1arp / action / emoji / mode / theme / status",
-          "\u5feb\u6377\u4f8b\u5b50\uff1a/neko help rp | /neko help mode | /neko status",
+          "\u6b63\u5f0f\u7248\u53ef\u7528\uff1arp / action / emoji / mode / theme / status / escape",
+          "\u6d4b\u8bd5\u7248\u8bf4\u660e\uff1aspark / voice / reactions / mood / systems",
+          "\u5feb\u6377\u4f8b\u5b50\uff1a/neko help status | /neko help action | /neko status",
         ];
     }
   }
