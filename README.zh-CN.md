@@ -47,7 +47,10 @@ https://github.com/QAQMOON/bondage-club-neko-chat-enhancer/raw/main/bondage-club
 Bug 版：
 https://github.com/QAQMOON/bondage-club-neko-chat-enhancer/raw/main/bondage-club-neko-bug.user.js
 
-Bug 版只建议用油猴安装，用来测试 RP 语气包等实验功能；不加入 FUSAM。
+英文版（UI 英文化）：
+https://github.com/QAQMOON/bondage-club-neko-chat-enhancer/raw/main/bondage-club-neko.en.user.js
+
+Bug 版只建议用油猴安装，用来测试 RP 语气包等实验功能；不加入 FUSAM。英文版将所有 UI 文本和设置翻译为英文。
 
 ## 更新
 
