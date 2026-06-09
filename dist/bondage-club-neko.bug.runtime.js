@@ -430,6 +430,8 @@
     rainOnSend: true,
     quickWheel: true,
     notifyIncoming: true,
+    replySuggestionsEnabled: false,
+    sceneSparkEnabled: false,
     nyanChance: 0.55,
     menuCollapsed: true,
     wheelCollapsed: true,
@@ -701,6 +703,8 @@
     }
     next.menuCollapsed = next.menuCollapsed !== false;
     next.wheelCollapsed = next.wheelCollapsed !== false;
+    next.replySuggestionsEnabled = next.replySuggestionsEnabled === true;
+    next.sceneSparkEnabled = next.sceneSparkEnabled === true;
     next.wheelX = Number.isFinite(Number(next.wheelX)) ? Number(next.wheelX) : null;
     next.wheelY = Number.isFinite(Number(next.wheelY)) ? Number(next.wheelY) : null;
     const fallbackActions = defaults.actions;
@@ -813,6 +817,11 @@
       relation: "systems",
       status: "status",
       "\u72b6\u6001": "status",
+      suggest: "suggest",
+      suggestion: "suggest",
+      suggestions: "suggest",
+      reply: "suggest",
+      replies: "suggest",
     };
     return aliases[key] || aliases[raw] || "main";
   }
@@ -1067,6 +1076,7 @@
       "\u5835\u5634\u8bf4\u8bdd\uff1a" + getSpeechModeLabel(speechState) + gagSuffix,
       "\u4e3b\u9898\uff1a" + (currentTheme().label || config.theme) + " | \u52a8\u4f5c\u76ee\u6807\uff1a" + getActionTargetModeLabel(),
       "\u7075\u611f\u8bb0\u5fc6\uff1a" + sceneMemory.length + "/" + NEKO_SCENE_MEMORY_LIMIT + " | \u7075\u611f\u5305\uff1a" + NEKO_SCENE_SPARK_BLUEPRINTS.length + " | \u4e92\u52a8\u529f\u80fd\uff1a" + NEKO_INTERACTION_FEATURES.length,
+      "Reply suggestions: " + (config.replySuggestionsEnabled ? "ON" : "OFF") + " | Scene spark: " + (config.sceneSparkEnabled ? "ON" : "OFF"),
       "\u732b\u5a18\u72b6\u6001\uff1a" + currentNekoFeatureMood() + " | /neko mood \u9ad8\u5174 | /neko reactions",
       "Neko systems\uff1aevents " + nekoSystemState.counters.events + " | relations " + Object.keys(nekoSystemState.relations).length + " | /neko systems",
       "NekoVoice\uff1aqueue " + nekoVoiceQueue.length + "/" + NEKO_VOICE_QUEUE_LIMIT + " | /neko voice nyaa | [NekoVoice] purr",
@@ -1112,9 +1122,17 @@
       case "spark":
         return [
           "[\u732b\u5a18\u5e2e\u52a9 / spark]",
+          "Switch: /neko spark on | off | status. Default: off.",
           "\u4f7f\u7528 /neko spark \u53ef\u6839\u636e\u6700\u8fd1\u804a\u5929\u3001\u9009\u4e2d\u76ee\u6807\u548c\u89d2\u8272\u72b6\u6001\u751f\u6210 RP \u7075\u611f\u77ed\u53e5\u3002\u5f53\u524d\u529f\u80fd\u5305\uff1a" + NEKO_SCENE_SPARK_BLUEPRINTS.length,
           "\u4f7f\u7528 /neko spark <\u5173\u952e\u8bcd> \u53ef\u641c\u7d22\u529f\u80fd\u5305\uff0c\u4f8b\u5982 link / tail / aftercare / \u5973\u4ec6\u3002",
           "\u7075\u611f\u4f1a\u653e\u5230\u53f3\u4e0b\u89d2\u5feb\u6377\u56de\u5e94\u91cc\uff0c\u70b9\u51fb\u5373\u53ef\u586b\u5165\u804a\u5929\u6846\u3002",
+        ];
+      case "suggest":
+        return [
+          "[\u732b\u5a18\u5e2e\u52a9 / suggest]",
+          "Reply suggestions are disabled by default.",
+          "Use /neko suggest on to enable automatic reply suggestions.",
+          "Use /neko suggest off to disable and hide the suggestion panel.",
         ];
       case "voice":
         return [
@@ -1157,7 +1175,7 @@
       default:
         return [
           "[\u732b\u5a18\u547d\u4ee4\u5e2e\u52a9] /neko help <\u5206\u7c7b>",
-          "\u6838\u5fc3\uff1avoice / reactions / mood / systems / spark / status",
+          "\u6838\u5fc3\uff1avoice / reactions / mood / systems / spark / suggest / status",
           "\u57fa\u7840\uff1arp / action / emoji / mode / theme",
           "\u5feb\u6377\u4f8b\u5b50\uff1a/neko help systems | /neko help reactions | /neko voice nyaa | /neko mood \u9ad8\u5174",
         ];
@@ -1184,7 +1202,16 @@
       showToast("NekoVoice queued.");
       return true;
     }
-    if (subcommand === "spark" || subcommand === "灵感" || subcommand === "火花") return showSceneSparkSuggestions({ query: parts.slice(2).join(" ") });
+    if (subcommand === "suggest" || subcommand === "suggestions" || subcommand === "reply" || subcommand === "replies") {
+      return handleNekoToggleCommand("replySuggestionsEnabled", parts.slice(2), "Reply suggestions");
+    }
+    if (subcommand === "spark" || subcommand === "灵感" || subcommand === "火花") {
+      const sparkAction = String(parts[2] || "").toLowerCase();
+      if (!sparkAction || ["on", "off", "open", "close", "enable", "disable", "status", "开启", "开", "关闭", "关"].includes(sparkAction)) {
+        return handleNekoToggleCommand("sceneSparkEnabled", parts.slice(2), "Scene spark");
+      }
+      return showSceneSparkSuggestions({ query: parts.slice(2).join(" ") });
+    }
     if (subcommand === "features" || subcommand === "feature" || subcommand === "功能") {
       sendNekoCommandNotice(getSceneFeatureLines(parts.slice(2).join(" ")));
       return true;
@@ -1206,7 +1233,7 @@
       sendNekoCommandNotice(getBugNekoStatusLines());
       return true;
     }
-    if (group === "action" || group === "emoji" || group === "mode" || group === "theme" || group === "spark" || group === "voice") {
+    if (group === "action" || group === "emoji" || group === "mode" || group === "theme" || group === "spark" || group === "voice" || group === "suggest") {
       sendNekoCommandNotice(getBugNekoHelpLines(group));
       return true;
     }
@@ -2378,7 +2405,12 @@
     const target = sceneSparkTargetName(data);
     const sound = feature.sound ? `*${feature.sound}* ` : "";
     const reply = `${sound}${feature.label.replace(/猫猫/g, "猫娘")}：${feature.description}`.replace(/\{target\}/g, target);
-    showReplySuggestions([reply].concat(collectSceneSparkSuggestions(data, text, { fallback: false })).slice(0, 4), NEKO_SCENE_SPARK_DURATION);
+    if (config.replySuggestionsEnabled || config.sceneSparkEnabled) {
+      const suggestions = [];
+      if (config.replySuggestionsEnabled) suggestions.push(reply);
+      if (config.sceneSparkEnabled) suggestions.push(...collectSceneSparkSuggestions(data, text, { fallback: false }));
+      if (suggestions.length) showReplySuggestions(suggestions.slice(0, 4), NEKO_SCENE_SPARK_DURATION);
+    }
     showToast(`${feature.label}：${feature.sound || feature.mood} 喵~`);
     return true;
   }
@@ -2518,7 +2550,7 @@
     triggerNekoVoiceDanmaku(text || "NekoVoice");
     triggerNekoVoiceSteam(member);
     spawnAtmosphereForMember(member || W.Player, "heart paw sparkle purr", null, strength + 1);
-    showReplySuggestions([`*${sound}* ${text || "NekoVoice effect"}`], NEKO_SCENE_SPARK_DURATION);
+    if (config.replySuggestionsEnabled) showReplySuggestions([`*${sound}* ${text || "NekoVoice effect"}`], NEKO_SCENE_SPARK_DURATION);
     await new Promise((resolve) => setTimeout(resolve, NEKO_VOICE_EFFECT_DURATION));
     nekoExpressionRestoreTimer = setTimeout(() => applyNekoExpression(saved), 60);
   }
@@ -2806,6 +2838,10 @@
   }
 
   function showSceneSparkSuggestions(context = {}) {
+    if (!config.sceneSparkEnabled) {
+      sendNekoCommandNotice(["[Neko spark]", "Scene spark is currently off.", "Use /neko spark on to enable it, or /neko spark off to disable it."]);
+      return true;
+    }
     const suggestions = collectSceneSparkSuggestions(context.data || {}, context.msg || "", { query: context.query || "" });
     showReplySuggestions(suggestions, NEKO_SCENE_SPARK_DURATION);
     if (suggestions.length) {
@@ -2813,6 +2849,31 @@
       return true;
     }
     sendNekoCommandNotice(["[猫娘灵感]", "暂时没有可用灵感，先选中一个目标或等聊天内容多一点喵。"]);
+    return true;
+  }
+
+  function handleNekoToggleCommand(key, parts, label) {
+    const action = String(parts?.[0] || "status").toLowerCase();
+    if (action === "on" || action === "open" || action === "enable" || action === "开启" || action === "开") {
+      config[key] = true;
+      saveConfig();
+      showToast(label + " enabled.");
+      sendNekoCommandNotice(["[Neko toggle]", label + ": ON", "Disable: /neko " + (key === "sceneSparkEnabled" ? "spark" : "suggest") + " off"]);
+      return true;
+    }
+    if (action === "off" || action === "close" || action === "disable" || action === "关闭" || action === "关") {
+      config[key] = false;
+      saveConfig();
+      hideReplySuggestions();
+      showToast(label + " disabled.");
+      sendNekoCommandNotice(["[Neko toggle]", label + ": OFF", "Enable: /neko " + (key === "sceneSparkEnabled" ? "spark" : "suggest") + " on"]);
+      return true;
+    }
+    sendNekoCommandNotice([
+      "[Neko toggle]",
+      label + ": " + (config[key] ? "ON" : "OFF"),
+      "Usage: /neko " + (key === "sceneSparkEnabled" ? "spark" : "suggest") + " on | off | status",
+    ]);
     return true;
   }
 
@@ -3274,14 +3335,18 @@
     bcModApi.hookFunction("ChatRoomMessageDisplay", 0, (args, next) => {
       const [data, msg, senderCharacter, metadata] = args;
       handleNekoPeerSignal(data);
-      recordSceneMemory(data, msg);
+      if (config.sceneSparkEnabled) recordSceneMemory(data, msg);
       maybeTriggerNekoVoiceFromText(data, msg, isOwnSender(data?.Sender) ? "own-display" : "incoming");
       handleNekoInteractionFeatures(data, msg, isOwnSender(data?.Sender) ? "own-display" : "incoming");
       maybeSpawnAtmosphere(data, msg);
       maybeShowRelationshipHint(data);
       maybeReactToIncomingAffection(data, msg);
-      const suggestions = collectReplySuggestions(msg).concat(collectSceneSparkSuggestions(data, msg, { fallback: false }));
-      if (suggestions.length && !isOwnSender(data?.Sender)) showReplySuggestions(suggestions);
+      if (!isOwnSender(data?.Sender)) {
+        const suggestions = [];
+        if (config.replySuggestionsEnabled) suggestions.push(...collectReplySuggestions(msg));
+        if (config.sceneSparkEnabled) suggestions.push(...collectSceneSparkSuggestions(data, msg, { fallback: false }));
+        if (suggestions.length) showReplySuggestions(suggestions);
+      }
       const nextMsg = shouldConvertDisplay(data, msg)
         ? convertByType(data?.Type, msg, { applyGag: isOwnSender(data?.Sender), featureMood: false })
         : msg;
