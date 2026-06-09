@@ -5033,7 +5033,12 @@
 
       #TextAreaChatLog .ChatMessageName {
         color: var(--label-color, var(--bcn-text)) !important;
-        text-shadow: 0 1px 0 #fff !important;
+        -webkit-text-stroke: 0.45px rgba(61, 82, 86, 0.58);
+        paint-order: stroke fill;
+        text-shadow:
+          0 0 1px rgba(61, 82, 86, 0.72),
+          0 1px 2px rgba(61, 82, 86, 0.3),
+          0 0 6px rgba(255, 255, 255, 0.28) !important;
         font-weight: 800;
       }
 
