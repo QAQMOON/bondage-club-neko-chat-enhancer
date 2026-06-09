@@ -457,6 +457,9 @@
   let maintenanceTimer = 0;
   let decorateTimer = 0;
   let visibilityBound = false;
+  let firstChatroomHelpShown = false;
+  let firstChatroomHelpTimer = 0;
+  let lastKnownScreen = "";
   let nekoFeatureMood = "default";
   let nekoFeatureMoodAt = 0;
   let nekoVoicePlaying = false;
@@ -1212,6 +1215,84 @@
     const style = document.createElement("style");
     style.textContent = css;
     document.head.appendChild(style);
+  }
+
+  function ensureFirstChatroomHelpHintStyle() {
+    if (document.getElementById("bcn-first-chatroom-help-style")) return;
+    const style = document.createElement("style");
+    style.id = "bcn-first-chatroom-help-style";
+    style.textContent = `
+      #bcn-first-chatroom-help {
+        position: fixed;
+        left: 28px;
+        top: 28px;
+        z-index: 2147483646;
+        max-width: min(720px, calc(100vw - 48px));
+        padding: 20px 24px;
+        border-radius: 22px;
+        background:
+          linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(255, 248, 252, 0.94)),
+          rgba(255, 255, 255, 0.96);
+        border: 1px solid rgba(205, 165, 225, 0.42);
+        box-shadow: 0 16px 36px rgba(156, 111, 201, 0.18);
+        color: #9c6fc9;
+        font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+        line-height: 1.35;
+        pointer-events: none;
+        opacity: 0;
+        transform: translateY(-6px);
+        animation: bcnFirstChatroomHelpIn 220ms ease-out forwards;
+      }
+      #bcn-first-chatroom-help .bcn-help-title {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 10px;
+        font-size: 24px;
+        font-weight: 700;
+      }
+      #bcn-first-chatroom-help .bcn-help-icon {
+        font-size: 28px;
+        line-height: 1;
+      }
+      #bcn-first-chatroom-help .bcn-help-line {
+        font-size: 22px;
+        font-weight: 500;
+        word-break: break-word;
+      }
+      @keyframes bcnFirstChatroomHelpIn {
+        from {
+          opacity: 0;
+          transform: translateY(-6px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  function showFirstChatroomHelpHint() {
+    if (!document.body || W.CurrentScreen !== "ChatRoom") return;
+    ensureFirstChatroomHelpHintStyle();
+    clearTimeout(firstChatroomHelpTimer);
+    document.getElementById("bcn-first-chatroom-help")?.remove();
+    const hint = document.createElement("div");
+    hint.id = "bcn-first-chatroom-help";
+    hint.innerHTML = `
+      <div class="bcn-help-title">
+        <span class="bcn-help-icon" aria-hidden="true">📝</span>
+        <span>可用指令：</span>
+      </div>
+      <div class="bcn-help-line">/neko help 获取猫娘插件说明喵~</div>
+    `;
+    document.body.appendChild(hint);
+    firstChatroomHelpTimer = setTimeout(() => {
+      hint.remove();
+      firstChatroomHelpTimer = 0;
+    }, 5000);
   }
 
   function randomNyan() {
@@ -3852,8 +3933,15 @@
 
   function syncScreenClass() {
     if (!document.body) return;
-    document.body.dataset.bcnScreen = W.CurrentScreen || "";
-    document.body.classList.toggle("bcn-chatroom", W.CurrentScreen === "ChatRoom");
+    const currentScreen = W.CurrentScreen || "";
+    const enteredChatroom = currentScreen === "ChatRoom" && lastKnownScreen !== "ChatRoom";
+    document.body.dataset.bcnScreen = currentScreen;
+    document.body.classList.toggle("bcn-chatroom", currentScreen === "ChatRoom");
+    if (enteredChatroom && !firstChatroomHelpShown) {
+      firstChatroomHelpShown = true;
+      showFirstChatroomHelpHint();
+    }
+    lastKnownScreen = currentScreen;
   }
 
   function getChatLogRoot() {
