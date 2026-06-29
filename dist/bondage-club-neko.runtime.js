@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bondage Club Neko Chat Enhancer
 // @namespace    https://penyo.ru/
-// @version      2.10.8
+// @version      2.10.9
 // @description  Bondage Club 猫娘消息转换、聊天室美化、猫爪表情雨和动作快捷轮盘
 // @author       Penyo (Modified)
 // @match        *://www.bondageprojects.com/club_game*
@@ -34,7 +34,7 @@
 
   const W = typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
   const MOD_ID = "BCNekoEnhancer";
-  const VERSION = "2.10.8";
+  const VERSION = "2.10.9";
   const STORE_KEY = "bcNekoEnhancer.config.v2";
   const MOD_SDK_URL = "https://cdn.jsdelivr.net/npm/bondage-club-mod-sdk@1.2.0/dist/bcmodsdk.js";
   const ACTION_LIBRARY_URL = "https://raw.githubusercontent.com/QAQMOON/bondage-club-neko-chat-enhancer/main/actions/catgirl-actions.json";
@@ -192,6 +192,8 @@
   let bcModApi = null;
   let sdkLoadingPromise = null;
   let settingsRegistered = false;
+  let nekoCommandsRegistered = false;
+  let nekoCommandRegistrationSource = "";
   let toastTimer = 0;
   let activeKaomojiGroup = "all";
   let lastPeerSignalAt = 0;
@@ -234,6 +236,8 @@
       url: location.href,
       escapePickActive: isEscapePickActive(),
       escapeGoddessMode,
+      commandRegistered: nekoCommandsRegistered,
+      commandRegistrationSource: nekoCommandRegistrationSource,
     }),
   };
 
@@ -259,6 +263,8 @@
       runtime: {
         sdkRegistered: !!bcModApi,
         chatHooks: patched,
+        commandRegistered: nekoCommandsRegistered,
+        commandRegistrationSource: nekoCommandRegistrationSource,
         statusBadgeHook: statusBadgePatched,
         roomEffectsHook: roomEffectsPatched,
         settingsRegistered,
@@ -1646,6 +1652,7 @@
       "\u52a8\u4f5c\u5e93\uff1a" + status.activeActions.length + "/" + ((actionLibrary.actions || []).length) + " \u53ef\u7528 | \u7f13\u5b58\uff1a" + (status.cached.actions ? "\u6709" : "\u65e0") + " | v" + (actionLibrary.version || "unknown"),
       "\u989c\u6587\u5b57\uff1a" + status.activeKaomojiItems.length + " \u4e2a | \u5206\u7ec4\uff1a" + status.visibleKaomojiGroups.length + "/" + ((kaomojiLibrary.groups || []).length) + " | \u7f13\u5b58\uff1a" + (status.cached.kaomoji ? "\u6709" : "\u65e0"),
       "\u540c\u63d2\u4ef6\u73a9\u5bb6\uff1a" + nekoPeers.size + " | SDK\uff1a" + (bcModApi ? "\u5df2\u6ce8\u518c" : "\u672a\u6ce8\u518c") + " | hooks\uff1a" + (patched ? "\u5df2\u63a5\u5165" : "\u672a\u63a5\u5165"),
+      "\u547d\u4ee4\u6ce8\u518c\uff1a" + (nekoCommandsRegistered ? "\u5df2\u6ce8\u518c (" + (nekoCommandRegistrationSource || "unknown") + ")" : "\u8f93\u5165\u62e6\u622a\u515c\u5e95"),
       "\u9003\u8131\u8f85\u52a9\uff1apick " + pickLeft + " | goddess " + (escapeGoddessMode ? "ON" : "OFF"),
       "\u732b\u732b\u83dc\u5355\uff1a" + (config.menuCollapsed ? "\u5df2\u6536\u8d77" : "\u5df2\u5c55\u5f00") + " | \u5feb\u6377\u52a8\u4f5c\uff1a" + (config.quickWheel ? "\u5f00" : "\u5173"),
     ];
@@ -1777,6 +1784,97 @@
     if (!handleNekoCommand(text)) return false;
     clearNekoCommandInput(text);
     return true;
+  }
+
+  function getNekoCommandDefinitions() {
+    const createAction = (prefix) => (argumentsString = "", message = "", args = []) => {
+      const argv = Array.isArray(args) ? args : String(argumentsString || "").trim().split(/\s+/).filter(Boolean);
+      runNekoCommand(`/${prefix} ${argv.join(" ")}`.trim());
+    };
+    return [
+      {
+        Tag: "neko",
+        Description: "Bondage Club Neko Chat Enhancer commands.",
+        Action: createAction("neko"),
+      },
+      {
+        Tag: "bug",
+        Description: "Alias for Bondage Club Neko Chat Enhancer commands.",
+        Action: createAction("bug"),
+      },
+      {
+        Tag: "noke",
+        Description: "Typo alias for Bondage Club Neko Chat Enhancer commands.",
+        Action: createAction("noke"),
+      },
+    ];
+  }
+
+  function markNekoCommandsRegistered(source) {
+    nekoCommandsRegistered = true;
+    nekoCommandRegistrationSource = source;
+    console.log(`[BC 猫娘增强] /neko 命令已注册喵~ (${source})`);
+    return true;
+  }
+
+  function tryRegisterCommandsWithHost(host, hostName, commands) {
+    if (!host || typeof host !== "object") return false;
+    if (typeof host.registerCommand === "function") {
+      for (const command of commands) host.registerCommand(command);
+      return markNekoCommandsRegistered(`${hostName}.registerCommand`);
+    }
+    if (typeof host.addCommand === "function") {
+      for (const command of commands) host.addCommand(command);
+      return markNekoCommandsRegistered(`${hostName}.addCommand`);
+    }
+    if (typeof host.registerCommands === "function") {
+      host.registerCommands(commands);
+      return markNekoCommandsRegistered(`${hostName}.registerCommands`);
+    }
+    if (typeof host.addCommands === "function") {
+      host.addCommands(commands);
+      return markNekoCommandsRegistered(`${hostName}.addCommands`);
+    }
+    return false;
+  }
+
+  function tryRegisterExternalNekoCommands(commands) {
+    const hosts = [
+      ["BCX", W.BCX],
+      ["BCX.commands", W.BCX?.commands],
+      ["BCX.Command", W.BCX?.Command],
+      ["bcx", W.bcx],
+      ["bcx.commands", W.bcx?.commands],
+      ["bcx.Command", W.bcx?.Command],
+      ["EBCH", W.EBCH],
+      ["EBCH.commands", W.EBCH?.commands],
+      ["EBCH.Command", W.EBCH?.Command],
+      ["ebch", W.ebch],
+      ["ebch.commands", W.ebch?.commands],
+      ["ebch.Command", W.ebch?.Command],
+    ];
+    for (const [hostName, host] of hosts) {
+      try {
+        if (tryRegisterCommandsWithHost(host, hostName, commands)) return true;
+      } catch (error) {
+        console.warn(`[BC 猫娘增强] ${hostName} 命令注册失败，继续尝试其它入口:`, error);
+      }
+    }
+    return false;
+  }
+
+  function registerNekoCommands() {
+    if (nekoCommandsRegistered) return true;
+    const commands = getNekoCommandDefinitions();
+    try {
+      if (tryRegisterExternalNekoCommands(commands)) return true;
+      if (typeof W.CommandCombine !== "function") return false;
+      W.CommandCombine(commands);
+      return markNekoCommandsRegistered("CommandCombine");
+    } catch (error) {
+      console.warn("[BC 猫娘增强] /neko 命令注册失败，保留输入拦截兜底:", error);
+      return false;
+    }
   }
 
   function insertKaomoji(face) {
@@ -3418,12 +3516,14 @@
     loadRemoteKaomojiLibrary();
     bindVisibilityLifecycle();
     syncScreenClass();
+    registerNekoCommands();
 
     const patchTimer = setInterval(() => {
       const chatReady = patchBC();
       const badgeReady = patchStatusBadge();
       const roomReady = patchRoomEffects();
-      if (chatReady && badgeReady && roomReady) {
+      const commandReady = registerNekoCommands();
+      if (chatReady && badgeReady && roomReady && commandReady) {
         clearInterval(patchTimer);
         startMaintenance();
       }

@@ -1083,7 +1083,7 @@
       "\u732b\u5a18\u72b6\u6001\uff1a" + currentNekoFeatureMood() + " | /neko mood \u9ad8\u5174 | /neko reactions",
       "Neko systems\uff1aevents " + nekoSystemState.counters.events + " | relations " + Object.keys(nekoSystemState.relations).length + " | /neko systems",
       "NekoVoice\uff1aqueue " + nekoVoiceQueue.length + "/" + NEKO_VOICE_QUEUE_LIMIT + " | /neko voice nyaa | [NekoVoice] purr",
-      "\u547d\u4ee4\u6ce8\u518c\uff1a" + (nekoCommandsRegistered ? "\u5df2\u6ce8\u518c (" + (nekoCommandRegistrationSource || "unknown") + ")" : "\u8f93\u5165\u62e6\u622a\u5149\u5e95"),
+      "\u547d\u4ee4\u6ce8\u518c\uff1a" + (nekoCommandsRegistered ? "\u5df2\u6ce8\u518c (" + (nekoCommandRegistrationSource || "unknown") + ")" : "\u8f93\u5165\u62e6\u622a\u515c\u5e95"),
     ];
   }
 
